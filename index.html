@@ -46,6 +46,12 @@
         </div>
         <button id="batchBtn">开始批量查询</button>
         <div id="batchStatus" style="color:#555"></div>
+        <div id="liveStats" style="font-size:13px; color:#333; display:grid; grid-template-columns:repeat(2, auto); gap:6px 16px;">
+          <div>成功: <span id="countSuccess">0</span></div>
+          <div>封禁: <span id="countBanned">0</span></div>
+          <div>正常: <span id="countNormal">0</span></div>
+          <div>未知: <span id="countUnknown">0</span></div>
+        </div>
       </div>
     </div>
     <table style="margin-top:12px; width:100%; border-collapse:collapse;">
@@ -89,6 +95,10 @@
       const batchInput = document.getElementById('batchIds');
       const batchBtn = document.getElementById('batchBtn');
       const batchStatus = document.getElementById('batchStatus');
+      const countSuccessEl = document.getElementById('countSuccess');
+      const countBannedEl = document.getElementById('countBanned');
+      const countNormalEl = document.getElementById('countNormal');
+      const countUnknownEl = document.getElementById('countUnknown');
       const batchBody = document.getElementById('batchBody');
       const batchIntervalEl = document.getElementById('batchInterval');
       const batchRetriesEl = document.getElementById('batchRetries');
@@ -109,6 +119,12 @@
       function setStatus(text) { statusEl.textContent = text || ''; }
       function setResult(text) { resultEl.textContent = text || ''; }
       function setBatchStatus(text) { batchStatus.textContent = text || ''; }
+      function updateLiveStats(s, b, n, u) {
+        countSuccessEl.textContent = String(s);
+        countBannedEl.textContent = String(b);
+        countNormalEl.textContent = String(n);
+        countUnknownEl.textContent = String(u);
+      }
       function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
       function isDigits(s) { return /^\d+$/.test(s); }
       function showStats(text) { statsContent.textContent = text || ''; statsMask.style.display = 'flex'; }
@@ -291,6 +307,7 @@
         let no = 0;
         let unknown = 0;
         let processed = 0;
+        updateLiveStats(http200, yes, no, unknown);
         for (const id of lines) {
           if (!isDigits(id)) {
             const tr = document.createElement('tr');
@@ -317,6 +334,7 @@
             await delay(intervalMs);
           }
           done++;
+          updateLiveStats(http200, yes, no, unknown);
           setBatchStatus(`已完成 ${done}/${lines.length}`);
         }
         setBatchStatus(`完成 ${lines.length}/${lines.length}`);
@@ -379,6 +397,7 @@
         let yes = batchResults.filter(r => r.banned === '是').length;
         let no = batchResults.filter(r => r.banned === '否').length;
         let unknown = batchResults.filter(r => r.banned === '未知').length;
+        updateLiveStats(http200, yes, no, unknown);
         const ptCounts = {};
         for (const r of batchResults) {
           if (r.punishTitle) ptCounts[r.punishTitle] = (ptCounts[r.punishTitle] || 0) + 1;
