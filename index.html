@@ -229,9 +229,10 @@
             retries--;
           }
           const bannedColor = r.banned === '是' ? '#d32f2f' : (r.banned === '否' ? '#2e7d32' : '#555');
+          const suLink = r.secUidVal ? `<a href="https://www.douyin.com/user/${encodeURIComponent(r.secUidVal)}" target="_blank" rel="noopener noreferrer">${r.secUidVal}</a>` : '';
           const html = `
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
-            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.secUidVal}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${suLink}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.httpStatus}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${bannedColor};">${r.banned}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.punishTitle || ''}</td>
