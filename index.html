@@ -184,9 +184,9 @@
 
       function updateConcurrency() {
         const lines = (batchInput.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-        const count = lines.length;
-        if (count === 0) return;
-        const suggestion = Math.min(Math.max(Math.ceil(count / 10), 1), 50);
+        const validCount = lines.filter(line => isDigits(line)).length;
+        if (validCount === 0) return;
+        const suggestion = Math.min(Math.max(Math.ceil(validCount / 10), 1), 50);
         batchConcurrencyEl.value = suggestion;
       }
       batchInput.addEventListener('input', updateConcurrency);
