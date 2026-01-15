@@ -74,7 +74,11 @@ function handleRequest(req, res) {
       if (Number.isFinite(v)) timeoutMs = Math.min(Math.max(v, 1000), 60000);
     }
     function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-    function randomTTWid() { return (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0, 32); }
+    function randomTTWid() {
+      const parts = [];
+      for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
+      return parts.join('');
+    }
     function randomUA() {
       const osList = [
         'Macintosh; Intel Mac OS X 10_15_7',
@@ -82,12 +86,12 @@ function handleRequest(req, res) {
         'X11; Linux x86_64'
       ];
       const os = osList[randInt(0, osList.length - 1)];
-      const chromeMajor = randInt(120, 126);
+      const chromeMajor = randInt(120, 131);
       return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
     }
     const parsed = new URL('https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num));
     const client = https;
-    const reqOptions = { method: 'GET', headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br', 'Connection': 'keep-alive', 'Referer':' https://www.douyin.com', 'User-Agent': randomUA(), 'cookie': 'ttwid=' + randomTTWid() } };
+    const reqOptions = { method: 'GET', headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br', 'Connection': 'keep-alive', 'Referer': 'https://www.douyin.com', 'User-Agent': randomUA(), 'Cookie': 'ttwid=' + randomTTWid() } };
     const out = client.request(parsed, reqOptions, (resp) => {
       const chunks = [];
       resp.on('data', (c) => chunks.push(c));
