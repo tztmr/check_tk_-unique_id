@@ -36,6 +36,10 @@
             <input id="batchInterval" type="number" min="0" max="5000" value="100" placeholder="间隔(ms)" style="width:120px; padding:8px 12px; font-size:14px" />
           </div>
           <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-size:12px; color:#555;">并发数</span>
+            <input id="batchConcurrency" type="number" min="1" max="50" value="5" placeholder="并发数" style="width:120px; padding:8px 12px; font-size:14px" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
             <span style="font-size:12px; color:#555;">重试次数</span>
             <input id="batchRetries" type="number" min="0" max="10" value="3" placeholder="重试次数" style="width:120px; padding:8px 12px; font-size:14px" />
           </div>
@@ -101,6 +105,7 @@
       const countUnknownEl = document.getElementById('countUnknown');
       const batchBody = document.getElementById('batchBody');
       const batchIntervalEl = document.getElementById('batchInterval');
+      const batchConcurrencyEl = document.getElementById('batchConcurrency');
       const batchRetriesEl = document.getElementById('batchRetries');
       const batchAttemptDelayEl = document.getElementById('batchAttemptDelay');
       const statsMask = document.getElementById('statsMask');
@@ -295,9 +300,10 @@
         rowMap = new Map();
         if (!lines.length) { setBatchStatus('请输入至少一个 unique_id'); return; }
         const intervalMs = readNumber(batchIntervalEl, 100, 0, 5000);
+        const concurrency = readNumber(batchConcurrencyEl, 5, 1, 50);
         const firstRetries = readNumber(batchRetriesEl, 3, 0, 10);
         const attemptDelayMs = readNumber(batchAttemptDelayEl, 500, 100, 5000);
-        setBatchStatus(`共 ${lines.length} 条，间隔 ${intervalMs}ms`);
+        setBatchStatus(`共 ${lines.length} 条，并发 ${concurrency}，间隔 ${intervalMs}ms`);
         let done = 0;
         let skip = 0;
         let errors = 0;
@@ -308,35 +314,59 @@
         let unknown = 0;
         let processed = 0;
         updateLiveStats(http200, yes, no, unknown);
-        for (const id of lines) {
-          if (!isDigits(id)) {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-              <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
-              <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
-              <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">skip</td>
-              <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
-              <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">非数字</td>
-            `;
-            batchBody.appendChild(tr);
-            rowMap.set(id, tr);
-            skip++;
-            batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字' });
-          } else {
-            const r = await queryOne(id, { retries: firstRetries, attemptDelayMs });
-            processed++;
-            if (!r || r.error) {
-              errors++;
-            } else {
-              if (r.httpStatus === 200) http200++; else httpOther++;
-              if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
+
+        const queue = [...lines];
+        let activeCount = 0;
+
+        // 并发执行器
+        async function runWorker() {
+          while (queue.length > 0) {
+            const id = queue.shift();
+            activeCount++;
+            
+            try {
+              if (!isDigits(id)) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">skip</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">非数字</td>
+                `;
+                batchBody.appendChild(tr);
+                rowMap.set(id, tr);
+                skip++;
+                batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字' });
+              } else {
+                const r = await queryOne(id, { retries: firstRetries, attemptDelayMs });
+                processed++;
+                if (!r || r.error) {
+                  errors++;
+                } else {
+                  if (r.httpStatus === 200) http200++; else httpOther++;
+                  if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
+                }
+                // 每个任务完成后等待 intervalMs
+                if (intervalMs > 0) await delay(intervalMs);
+              }
+            } catch (e) {
+              console.error(e);
+            } finally {
+              done++;
+              updateLiveStats(http200, yes, no, unknown);
+              setBatchStatus(`已完成 ${done}/${lines.length}`);
+              activeCount--;
             }
-            await delay(intervalMs);
           }
-          done++;
-          updateLiveStats(http200, yes, no, unknown);
-          setBatchStatus(`已完成 ${done}/${lines.length}`);
         }
+
+        const workers = [];
+        for (let i = 0; i < concurrency; i++) {
+          workers.push(runWorker());
+        }
+        await Promise.all(workers);
+
         setBatchStatus(`完成 ${lines.length}/${lines.length}`);
         const ptCounts = {};
         for (const r of batchResults) {
