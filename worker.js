@@ -468,18 +468,10 @@ const html = `<!DOCTYPE html>
             
             try {
               if (!isDigits(id)) {
-                const tr = document.createElement('tr');
-                tr.innerHTML = \`
-                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${id}</td>
-                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
-                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">skip</td>
-                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
-                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">非数字</td>
-                \`;
-                batchBody.appendChild(tr);
-                rowMap.set(id, tr);
+                // 跳过非数字行，不显示在表格中
                 skip++;
-                batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字' });
+                // 仍然记录在结果中以便统计，但标记为不显示
+                batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字', hidden: true });
               } else {
                 const r = await queryOne(id, { retries: firstRetries, attemptDelayMs });
                 processed++;
@@ -537,7 +529,9 @@ const html = `<!DOCTYPE html>
         try { await navigator.clipboard.writeText(text); } catch (_) {}
       });
       statsExport.addEventListener('click', () => {
-        const csv = toCSV(batchResults);
+        // 导出时过滤掉被隐藏的行（非数字/skip）
+        const visibleRows = batchResults.filter(r => !r.hidden);
+        const csv = toCSV(visibleRows);
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
