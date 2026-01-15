@@ -1,0 +1,6 @@
+name = "douyin-check"
+main = "worker.js"
+compatibility_date = "2023-10-01"
+
+[placement]
+mode = "smart"

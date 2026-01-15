@@ -1,0 +1,585 @@
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (request.method === 'GET' && url.pathname === '/') {
+      return new Response(html, {
+        headers: { 'Content-Type': 'text/html;charset=UTF-8' },
+      });
+    }
+
+    if (request.method === 'GET' && url.pathname === '/check') {
+      const num = url.searchParams.get('num') || '';
+      const secUid = url.searchParams.get('sec_uid') || '';
+      if (!num && !secUid) return new Response(JSON.stringify({ error: 'missing num or sec_uid' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      
+      const timeoutMsRaw = url.searchParams.get('timeout_ms');
+      let timeoutMs = 8000;
+      if (timeoutMsRaw) {
+        const v = Number(timeoutMsRaw);
+        if (Number.isFinite(v)) timeoutMs = Math.min(Math.max(v, 1000), 60000);
+      }
+
+      function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+      function randomTTWid() {
+        const parts = [];
+        for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
+        return parts.join('');
+      }
+      function randomUA() {
+        const osList = [
+          'Macintosh; Intel Mac OS X 10_15_7',
+          'Windows NT 10.0; Win64; x64',
+          'X11; Linux x86_64'
+        ];
+        const os = osList[randInt(0, osList.length - 1)];
+        const chromeMajor = randInt(120, 131);
+        return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+      }
+
+      const targetUrl = 'https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num);
+      const headers = {
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Referer': 'https://www.douyin.com',
+        'User-Agent': randomUA(),
+        'Cookie': 'ttwid=' + randomTTWid()
+      };
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        const resp = await fetch(targetUrl, {
+          method: 'GET',
+          headers: headers,
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+
+        // Fetch API automatically handles decompression
+        const arrayBuffer = await resp.arrayBuffer();
+        
+        // Convert to base64
+        let binary = '';
+        const bytes = new Uint8Array(arrayBuffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        const bodyB64 = btoa(binary);
+
+        // Try to decode as utf-8 for body string
+        let bodyStr = '';
+        try {
+          bodyStr = new TextDecoder('utf-8').decode(bytes);
+        } catch (e) {
+          // ignore
+        }
+
+        const ct = resp.headers.get('content-type') || '';
+        let charset = 'utf-8';
+        const m = ct.match(/charset=([^;]+)/i);
+        if (m) charset = m[1].trim().toLowerCase();
+
+        // Convert headers to object
+        const respHeaders = {};
+        for (const [key, value] of resp.headers.entries()) {
+          respHeaders[key] = value;
+        }
+
+        return new Response(JSON.stringify({
+          status: resp.status,
+          headers: respHeaders,
+          content_type: ct,
+          charset,
+          body: bodyStr,
+          body_b64: bodyB64
+        }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+
+      } catch (err) {
+        return new Response(JSON.stringify({ error: String(err && err.message || err) }), {
+          status: 502,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      }
+    }
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET,OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  }
+};
+
+const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抖音用户查询</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; margin: 24px; }
+      .row { display: flex; gap: 8px; }
+      input { flex: 1; padding: 8px 12px; font-size: 14px; }
+      button { padding: 8px 12px; font-size: 14px; }
+      pre { background: #f6f8fa; padding: 12px; overflow: auto; border: 1px solid #eaecef; }
+      .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center; z-index: 9999; }
+      .modal { background: #fff; width: 480px; max-width: 92vw; border: 1px solid #eaecef; box-shadow: 0 8px 24px rgba(0,0,0,0.15); border-radius: 8px; overflow: hidden; }
+      .modal-header { padding: 12px 16px; border-bottom: 1px solid #eaecef; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+      .modal-body { padding: 12px 16px; }
+      .modal-actions { padding: 12px 16px; border-top: 1px solid #eaecef; display: flex; justify-content: flex-end; gap: 8px; }
+    </style>
+  </head>
+  <body>
+    <h2>基于后端接口的抖音用户查询</h2>
+    <div class="row">
+      <input id="uniqueId" type="text" placeholder="输入抖音号 unique_id" />
+      <button id="queryBtn">查询</button>
+    </div>
+    <p id="status" style="margin-top:8px;color:#555"></p>
+    <pre id="result" style="margin-top:12px"></pre>
+
+    <h3 style="margin-top:24px">批量查询</h3>
+    <div style="display:flex; gap:8px; align-items:flex-start;">
+      <textarea id="batchIds" placeholder="每行一个 unique_id" style="flex:1; height:160px; padding:8px 12px; font-size:14px"></textarea>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; gap:8px;">
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-size:12px; color:#555;">间隔(ms)</span>
+            <input id="batchInterval" type="number" min="0" max="5000" value="100" placeholder="间隔(ms)" style="width:120px; padding:8px 12px; font-size:14px" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-size:12px; color:#555;">并发数</span>
+            <input id="batchConcurrency" type="number" min="1" max="50" value="5" placeholder="并发数" style="width:120px; padding:8px 12px; font-size:14px" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-size:12px; color:#555;">重试次数</span>
+            <input id="batchRetries" type="number" min="0" max="10" value="3" placeholder="重试次数" style="width:120px; padding:8px 12px; font-size:14px" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-size:12px; color:#555;">单次重试间隔(ms)</span>
+            <input id="batchAttemptDelay" type="number" min="100" max="5000" value="500" placeholder="单次重试间隔(ms)" style="width:160px; padding:8px 12px; font-size:14px" />
+          </div>
+        </div>
+        <button id="batchBtn">开始批量查询</button>
+        <div id="batchStatus" style="color:#555"></div>
+        <div id="liveStats" style="font-size:13px; color:#333; display:grid; grid-template-columns:repeat(2, auto); gap:6px 16px;">
+          <div>成功: <span id="countSuccess">0</span></div>
+          <div>封禁: <span id="countBanned">0</span></div>
+          <div>正常: <span id="countNormal">0</span></div>
+          <div>未知: <span id="countUnknown">0</span></div>
+        </div>
+      </div>
+    </div>
+    <table style="margin-top:12px; width:100%; border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">unique_id</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">sec_uid</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">HTTP</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">封禁</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">punish_title</th>
+        </tr>
+      </thead>
+      <tbody id="batchBody"></tbody>
+    </table>
+
+    <div id="statsMask" class="modal-mask">
+      <div class="modal">
+        <div class="modal-header">
+          <span>批量统计</span>
+          <button id="statsClose" style="border:none;background:transparent;font-size:18px;line-height:1;cursor:pointer">×</button>
+        </div>
+        <div class="modal-body">
+          <pre id="statsContent" style="margin:0"></pre>
+        </div>
+        <div class="modal-actions">
+          <input id="retryUnknownCount" type="number" min="0" max="10" value="6" placeholder="次数" style="width:96px; padding:6px 8px; font-size:14px" />
+          <input id="retryUnknownDelay" type="number" min="100" max="5000" value="800" placeholder="间隔(ms)" style="width:120px; padding:6px 8px; font-size:14px" />
+          <button id="statsRetryUnknown">继续查询未知</button>
+          <button id="statsCopy">复制统计</button>
+          <button id="statsExport">导出CSV</button>
+          <button id="statsOk">知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const input = document.getElementById('uniqueId');
+      const btn = document.getElementById('queryBtn');
+      const statusEl = document.getElementById('status');
+      const resultEl = document.getElementById('result');
+      const batchInput = document.getElementById('batchIds');
+      const batchBtn = document.getElementById('batchBtn');
+      const batchStatus = document.getElementById('batchStatus');
+      const countSuccessEl = document.getElementById('countSuccess');
+      const countBannedEl = document.getElementById('countBanned');
+      const countNormalEl = document.getElementById('countNormal');
+      const countUnknownEl = document.getElementById('countUnknown');
+      const batchBody = document.getElementById('batchBody');
+      const batchIntervalEl = document.getElementById('batchInterval');
+      const batchConcurrencyEl = document.getElementById('batchConcurrency');
+      const batchRetriesEl = document.getElementById('batchRetries');
+      const batchAttemptDelayEl = document.getElementById('batchAttemptDelay');
+      const statsMask = document.getElementById('statsMask');
+      const statsContent = document.getElementById('statsContent');
+      const statsClose = document.getElementById('statsClose');
+      const statsOk = document.getElementById('statsOk');
+      const statsCopy = document.getElementById('statsCopy');
+      const statsExport = document.getElementById('statsExport');
+      const statsRetryUnknown = document.getElementById('statsRetryUnknown');
+      const retryUnknownCountEl = document.getElementById('retryUnknownCount');
+      const retryUnknownDelayEl = document.getElementById('retryUnknownDelay');
+      let batchResults = [];
+      let rowMap = new Map();
+      let unknownIds = [];
+
+      function setStatus(text) { statusEl.textContent = text || ''; }
+      function setResult(text) { resultEl.textContent = text || ''; }
+      function setBatchStatus(text) { batchStatus.textContent = text || ''; }
+      function updateLiveStats(s, b, n, u) {
+        countSuccessEl.textContent = String(s);
+        countBannedEl.textContent = String(b);
+        countNormalEl.textContent = String(n);
+        countUnknownEl.textContent = String(u);
+      }
+      function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+      function isDigits(s) { return /^\\d+$/.test(s); }
+      function showStats(text) { statsContent.textContent = text || ''; statsMask.style.display = 'flex'; }
+      function hideStats() { statsMask.style.display = 'none'; }
+      function base64ToBytes(b64) {
+        try {
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return bytes;
+        } catch (_) { return new Uint8Array(0); }
+      }
+      function pickCharset(data) {
+        let ct = (data && data.content_type) || '';
+        if (!ct && data && data.headers) ct = data.headers['content-type'] || data.headers['Content-Type'] || '';
+        let cs = (data && data.charset) || '';
+        if (!cs) {
+          const m = String(ct).match(/charset=([^;]+)/i);
+          if (m) cs = m[1].trim();
+        }
+        cs = (cs || 'utf-8').toLowerCase();
+        return cs;
+      }
+      function decodeResponse(data) {
+        const b64 = data && data.body_b64;
+        let text = data && data.body || '';
+        if (b64) {
+          const bytes = base64ToBytes(b64);
+          const cs = pickCharset(data);
+          try { text = new TextDecoder(cs).decode(bytes); }
+          catch(_) {
+            try { text = new TextDecoder('utf-8').decode(bytes); }
+            catch(__) {
+              try { text = new TextDecoder('gbk').decode(bytes); }
+              catch(___) { text = new TextDecoder().decode(bytes); }
+            }
+          }
+        }
+        return text;
+      }
+      function readNumber(el, defVal, min, max) {
+        const v = Number((el && el.value) || defVal);
+        if (!Number.isFinite(v)) return defVal;
+        return Math.min(Math.max(v, min), max);
+      }
+      function toCSV(rows) {
+        function esc(v) { const s = v == null ? '' : String(v); return '"' + s.replace(/"/g, '""') + '"'; }
+        const header = ['unique_id','sec_uid','http_status','banned','punish_title','note'].map(esc).join(',');
+        const lines = rows.map(r => [esc(r.id), esc(r.secUid), esc(r.httpStatus), esc(r.banned), esc(r.punishTitle), esc(r.note)].join(','));
+        return [header, ...lines].join('\\n');
+      }
+
+      async function query() {
+        const val = (input.value || '').trim();
+        if (!val) {
+          setStatus('请输入 unique_id');
+          setResult('');
+          return;
+        }
+        setStatus('查询中...');
+        setResult('');
+        try {
+          const resp = await fetch(\`/check?num=\${encodeURIComponent(val)}\`);
+          const data = await resp.json();
+          setStatus(\`HTTP \${data.status}\`);
+          let body = decodeResponse(data);
+          try {
+            const parsed = JSON.parse(body);
+            body = JSON.stringify(parsed, null, 2);
+          } catch (_) {}
+          setResult(body || '无返回');
+        } catch (e) {
+          setStatus('请求失败');
+          setResult(String(e && e.message || e));
+        }
+      }
+
+      btn.addEventListener('click', query);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') query();
+      });
+
+      async function queryOne(id, opts) {
+        const retriesCfg = opts && Number.isFinite(opts.retries) ? opts.retries : 3;
+        const delayCfg = opts && Number.isFinite(opts.attemptDelayMs) ? opts.attemptDelayMs : 500;
+        async function attempt() {
+          const resp = await fetch(\`/check?num=\${encodeURIComponent(id)}\`);
+          const data = await resp.json();
+          const httpStatus = data.status;
+          const bodyText = decodeResponse(data);
+          let punishTitle = null;
+          let banned = '否';
+          let secUidVal = '';
+          if (httpStatus === 200) {
+            if (!bodyText || !String(bodyText).trim()) {
+              banned = '未知';
+            } else {
+              try {
+                const obj = JSON.parse(bodyText);
+                const pt = obj && obj.user_info && obj.user_info.punish_remind_info && obj.user_info.punish_remind_info.punish_title;
+                if (typeof pt === 'string') punishTitle = pt;
+                const su = obj && obj.user_info && obj.user_info.sec_uid;
+                if (typeof su === 'string') secUidVal = su;
+                banned = punishTitle === '账号已被封禁' ? '是' : '否';
+              } catch (_) {
+                banned = '未知';
+              }
+            }
+          }
+          return { httpStatus, punishTitle, banned, secUidVal };
+        }
+        try {
+          let r = await attempt();
+          let retries = retriesCfg;
+          while (retries > 0 && (r.banned === '未知' || r.httpStatus !== 200)) {
+            await delay(delayCfg);
+            r = await attempt();
+            retries--;
+          }
+          const bannedColor = r.banned === '是' ? '#d32f2f' : (r.banned === '否' ? '#2e7d32' : '#555');
+          const suLink = r.secUidVal ? \`<a href="https://www.douyin.com/user/\${encodeURIComponent(r.secUidVal)}" target="_blank" rel="noopener noreferrer">\${r.secUidVal}</a>\` : '';
+          const html = \`
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${id}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${suLink}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${r.httpStatus}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:\${bannedColor};">\${r.banned}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${r.punishTitle || ''}</td>
+          \`;
+          if (rowMap.has(id)) {
+            rowMap.get(id).innerHTML = html;
+          } else {
+            const tr = document.createElement('tr');
+            tr.innerHTML = html;
+            batchBody.appendChild(tr);
+            rowMap.set(id, tr);
+          }
+          const idx = batchResults.findIndex(x => x.id === id);
+          const rec = { id, secUid: r.secUidVal, httpStatus: r.httpStatus, banned: r.banned, punishTitle: r.punishTitle || '', note: '' };
+          if (idx >= 0) batchResults[idx] = rec; else batchResults.push(rec);
+          return r;
+        } catch (e) {
+          const html = \`
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${id}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">error</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${String(e && e.message || e)}</td>
+          \`;
+          if (rowMap.has(id)) {
+            rowMap.get(id).innerHTML = html;
+          } else {
+            const tr = document.createElement('tr');
+            tr.innerHTML = html;
+            batchBody.appendChild(tr);
+            rowMap.set(id, tr);
+          }
+          const idx = batchResults.findIndex(x => x.id === id);
+          const rec = { id, secUid: '', httpStatus: 'error', banned: '-', punishTitle: '', note: String(e && e.message || e) };
+          if (idx >= 0) batchResults[idx] = rec; else batchResults.push(rec);
+          return { error: true };
+        }
+      }
+
+      batchBtn.addEventListener('click', async () => {
+        const lines = (batchInput.value || '').split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
+        batchBody.innerHTML = '';
+        batchResults = [];
+        rowMap = new Map();
+        if (!lines.length) { setBatchStatus('请输入至少一个 unique_id'); return; }
+        const intervalMs = readNumber(batchIntervalEl, 100, 0, 5000);
+        const concurrency = readNumber(batchConcurrencyEl, 5, 1, 50);
+        const firstRetries = readNumber(batchRetriesEl, 3, 0, 10);
+        const attemptDelayMs = readNumber(batchAttemptDelayEl, 500, 100, 5000);
+        setBatchStatus(\`共 \${lines.length} 条，并发 \${concurrency}，间隔 \${intervalMs}ms\`);
+        let done = 0;
+        let skip = 0;
+        let errors = 0;
+        let http200 = 0;
+        let httpOther = 0;
+        let yes = 0;
+        let no = 0;
+        let unknown = 0;
+        let processed = 0;
+        updateLiveStats(http200, yes, no, unknown);
+
+        const queue = [...lines];
+        let activeCount = 0;
+
+        // 并发执行器
+        async function runWorker() {
+          while (queue.length > 0) {
+            const id = queue.shift();
+            activeCount++;
+            
+            try {
+              if (!isDigits(id)) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = \`
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${id}</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">skip</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
+                  <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">非数字</td>
+                \`;
+                batchBody.appendChild(tr);
+                rowMap.set(id, tr);
+                skip++;
+                batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字' });
+              } else {
+                const r = await queryOne(id, { retries: firstRetries, attemptDelayMs });
+                processed++;
+                if (!r || r.error) {
+                  errors++;
+                } else {
+                  if (r.httpStatus === 200) http200++; else httpOther++;
+                  if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
+                }
+                // 每个任务完成后等待 intervalMs
+                if (intervalMs > 0) await delay(intervalMs);
+              }
+            } catch (e) {
+              console.error(e);
+            } finally {
+              done++;
+              updateLiveStats(http200, yes, no, unknown);
+              setBatchStatus(\`已完成 \${done}/\${lines.length}\`);
+              activeCount--;
+            }
+          }
+        }
+
+        const workers = [];
+        for (let i = 0; i < concurrency; i++) {
+          workers.push(runWorker());
+        }
+        await Promise.all(workers);
+
+        setBatchStatus(\`完成 \${lines.length}/\${lines.length}\`);
+        const ptCounts = {};
+        for (const r of batchResults) {
+          if (r.punishTitle) ptCounts[r.punishTitle] = (ptCounts[r.punishTitle] || 0) + 1;
+        }
+        unknownIds = batchResults.filter(r => r.banned === '未知').map(r => r.id);
+        const ptLines = Object.keys(ptCounts).length ? ['惩罚标题统计:'].concat(Object.entries(ptCounts).map(([k,v]) => \`- \${k}: \${v}\`)) : [];
+        const summary = [
+          \`总数: \${lines.length}\`,
+          \`已处理: \${processed}\`,
+          \`跳过: \${skip}\`,
+          \`请求成功(HTTP 200): \${http200}\`,
+          \`请求失败(非200): \${httpOther}\`,
+          \`封禁: \${yes}\`,
+          \`未封禁: \${no}\`,
+          \`未知: \${unknown}\`
+        ].concat(ptLines).join('\\n');
+        statsRetryUnknown.textContent = \`继续查询未知(\${unknown})\`;
+        statsRetryUnknown.disabled = unknown === 0;
+        showStats(summary);
+      });
+      statsClose.addEventListener('click', hideStats);
+      statsOk.addEventListener('click', hideStats);
+      statsCopy.addEventListener('click', async () => {
+        const text = statsContent.textContent || '';
+        try { await navigator.clipboard.writeText(text); } catch (_) {}
+      });
+      statsExport.addEventListener('click', () => {
+        const csv = toCSV(batchResults);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'batch_results.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+      statsRetryUnknown.addEventListener('click', async () => {
+        if (!unknownIds.length) return;
+        hideStats();
+        setBatchStatus(\`正在重新查询未知 \${unknownIds.length} 条\`);
+        let done = 0;
+        for (const id of unknownIds) {
+          const moreRetries = readNumber(retryUnknownCountEl, 6, 0, 10);
+          const moreDelay = readNumber(retryUnknownDelayEl, 800, 100, 5000);
+          await queryOne(id, { retries: moreRetries, attemptDelayMs: moreDelay });
+          await delay(Math.min(moreDelay, 1000));
+          done++;
+          setBatchStatus(\`已重新查询 \${done}/\${unknownIds.length}\`);
+        }
+        const lines = (batchInput.value || '').split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
+        let skip = batchResults.filter(r => r.httpStatus === 'skip').length;
+        let errors = batchResults.filter(r => r.httpStatus === 'error').length;
+        let http200 = batchResults.filter(r => r.httpStatus === 200).length;
+        let httpOther = lines.length - skip - http200 - errors;
+        let yes = batchResults.filter(r => r.banned === '是').length;
+        let no = batchResults.filter(r => r.banned === '否').length;
+        let unknown = batchResults.filter(r => r.banned === '未知').length;
+        updateLiveStats(http200, yes, no, unknown);
+        const ptCounts = {};
+        for (const r of batchResults) {
+          if (r.punishTitle) ptCounts[r.punishTitle] = (ptCounts[r.punishTitle] || 0) + 1;
+        }
+        const ptLines = Object.keys(ptCounts).length ? ['惩罚标题统计:'].concat(Object.entries(ptCounts).map(([k,v]) => \`- \${k}: \${v}\`)) : [];
+        const summary = [
+          \`总数: \${lines.length}\`,
+          \`已处理: \${lines.length - skip}\`,
+          \`跳过: \${skip}\`,
+          \`请求成功(HTTP 200): \${http200}\`,
+          \`请求失败(非200): \${httpOther}\`,
+          \`封禁: \${yes}\`,
+          \`未封禁: \${no}\`,
+          \`未知: \${unknown}\`
+        ].concat(ptLines).join('\\n');
+        statsRetryUnknown.textContent = \`继续查询未知(\${unknown})\`;
+        statsRetryUnknown.disabled = unknown === 0;
+        showStats(summary);
+      });
+    </script>
+  </body>
+</html>`;
