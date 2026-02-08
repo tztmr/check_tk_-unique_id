@@ -252,7 +252,7 @@ const html = `<!DOCTYPE html>
       const retryUnknownDelayEl = document.getElementById('retryUnknownDelay');
       let batchResults = [];
       let rowMap = new Map();
-      let unknownIds = [];
+      let unknownTasks = [];
 
       function setStatus(text) { statusEl.textContent = text || ''; }
       function setResult(text) { resultEl.textContent = text || ''; }
@@ -354,7 +354,23 @@ const html = `<!DOCTYPE html>
         if (e.key === 'Enter') query();
       });
 
-      async function queryOne(id, opts) {
+      function ensureRow(index, id) {
+        if (rowMap.has(index)) return rowMap.get(index);
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td style="padding:6px 4px; border-bottom:1px solid #eaecef;">' + id + '</td>' +
+          '<td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>' +
+          '<td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">pending</td>' +
+          '<td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>' +
+          '<td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>';
+        batchBody.appendChild(tr);
+        rowMap.set(index, tr);
+        return tr;
+      }
+
+      async function queryOne(task, opts) {
+        const id = task && task.id;
+        const index = task && Number.isFinite(task.index) ? task.index : -1;
         const retriesCfg = opts && Number.isFinite(opts.retries) ? opts.retries : 3;
         const delayCfg = opts && Number.isFinite(opts.attemptDelayMs) ? opts.attemptDelayMs : 500;
         async function attempt() {
@@ -400,17 +416,10 @@ const html = `<!DOCTYPE html>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:\${bannedColor};">\${r.banned}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${r.punishTitle || ''}</td>
           \`;
-          if (rowMap.has(id)) {
-            rowMap.get(id).innerHTML = html;
-          } else {
-            const tr = document.createElement('tr');
-            tr.innerHTML = html;
-            batchBody.appendChild(tr);
-            rowMap.set(id, tr);
-          }
-          const idx = batchResults.findIndex(x => x.id === id);
+          const tr = ensureRow(index, id);
+          tr.innerHTML = html;
           const rec = { id, secUid: r.secUidVal, httpStatus: r.httpStatus, banned: r.banned, punishTitle: r.punishTitle || '', note: '' };
-          if (idx >= 0) batchResults[idx] = rec; else batchResults.push(rec);
+          if (index >= 0) batchResults[index] = rec;
           return r;
         } catch (e) {
           const html = \`
@@ -420,17 +429,10 @@ const html = `<!DOCTYPE html>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">\${String(e && e.message || e)}</td>
           \`;
-          if (rowMap.has(id)) {
-            rowMap.get(id).innerHTML = html;
-          } else {
-            const tr = document.createElement('tr');
-            tr.innerHTML = html;
-            batchBody.appendChild(tr);
-            rowMap.set(id, tr);
-          }
-          const idx = batchResults.findIndex(x => x.id === id);
+          const tr = ensureRow(index, id);
+          tr.innerHTML = html;
           const rec = { id, secUid: '', httpStatus: 'error', banned: '-', punishTitle: '', note: String(e && e.message || e) };
-          if (idx >= 0) batchResults[idx] = rec; else batchResults.push(rec);
+          if (index >= 0) batchResults[index] = rec;
           return { error: true };
         }
       }
@@ -438,7 +440,7 @@ const html = `<!DOCTYPE html>
       batchBtn.addEventListener('click', async () => {
         const lines = (batchInput.value || '').split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
         batchBody.innerHTML = '';
-        batchResults = [];
+        batchResults = new Array(lines.length);
         rowMap = new Map();
         if (!lines.length) { setBatchStatus('请输入至少一个 unique_id'); return; }
         const intervalMs = readNumber(batchIntervalEl, 100, 0, 5000);
@@ -457,33 +459,37 @@ const html = `<!DOCTYPE html>
         let processed = 0;
         updateLiveStats(http200, yes, no, unknown);
 
-        const queue = [...lines];
+        const queue = [];
+        for (let i = 0; i < lines.length; i++) {
+          const id = lines[i];
+          if (!isDigits(id)) {
+            skip++;
+            done++;
+            batchResults[i] = { id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字', hidden: true };
+            continue;
+          }
+          ensureRow(i, id);
+          queue.push({ id, index: i });
+        }
+        setBatchStatus(\`已完成 \${done}/\${lines.length}\`);
         let activeCount = 0;
 
         // 并发执行器
         async function runWorker() {
           while (queue.length > 0) {
-            const id = queue.shift();
+            const task = queue.shift();
             activeCount++;
             
             try {
-              if (!isDigits(id)) {
-                // 跳过非数字行，不显示在表格中
-                skip++;
-                // 仍然记录在结果中以便统计，但标记为不显示
-                batchResults.push({ id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字', hidden: true });
+              const r = await queryOne(task, { retries: firstRetries, attemptDelayMs });
+              processed++;
+              if (!r || r.error) {
+                errors++;
               } else {
-                const r = await queryOne(id, { retries: firstRetries, attemptDelayMs });
-                processed++;
-                if (!r || r.error) {
-                  errors++;
-                } else {
-                  if (r.httpStatus === 200) http200++; else httpOther++;
-                  if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
-                }
-                // 每个任务完成后等待 intervalMs
-                if (intervalMs > 0) await delay(intervalMs);
+                if (r.httpStatus === 200) http200++; else httpOther++;
+                if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
               }
+              if (intervalMs > 0) await delay(intervalMs);
             } catch (e) {
               console.error(e);
             } finally {
@@ -504,9 +510,10 @@ const html = `<!DOCTYPE html>
         setBatchStatus(\`完成 \${lines.length}/\${lines.length}\`);
         const ptCounts = {};
         for (const r of batchResults) {
+          if (!r || r.hidden) continue;
           if (r.punishTitle) ptCounts[r.punishTitle] = (ptCounts[r.punishTitle] || 0) + 1;
         }
-        unknownIds = batchResults.filter(r => r.banned === '未知').map(r => r.id);
+        unknownTasks = batchResults.map((r, index) => (r && !r.hidden && r.banned === '未知') ? ({ id: r.id, index }) : null).filter(Boolean);
         const ptLines = Object.keys(ptCounts).length ? ['惩罚标题统计:'].concat(Object.entries(ptCounts).map(([k,v]) => \`- \${k}: \${v}\`)) : [];
         const summary = [
           \`总数: \${lines.length}\`,
@@ -530,7 +537,7 @@ const html = `<!DOCTYPE html>
       });
       statsExport.addEventListener('click', () => {
         // 导出时过滤掉被隐藏的行（非数字/skip）
-        const visibleRows = batchResults.filter(r => !r.hidden);
+        const visibleRows = batchResults.filter(r => r && !r.hidden);
         const csv = toCSV(visibleRows);
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -543,31 +550,33 @@ const html = `<!DOCTYPE html>
         URL.revokeObjectURL(url);
       });
       statsRetryUnknown.addEventListener('click', async () => {
-        if (!unknownIds.length) return;
+        if (!unknownTasks.length) return;
         hideStats();
-        setBatchStatus(\`正在重新查询未知 \${unknownIds.length} 条\`);
+        setBatchStatus(\`正在重新查询未知 \${unknownTasks.length} 条\`);
         let done = 0;
-        for (const id of unknownIds) {
+        for (const task of unknownTasks) {
           const moreRetries = readNumber(retryUnknownCountEl, 6, 0, 10);
           const moreDelay = readNumber(retryUnknownDelayEl, 800, 100, 5000);
-          await queryOne(id, { retries: moreRetries, attemptDelayMs: moreDelay });
+          await queryOne(task, { retries: moreRetries, attemptDelayMs: moreDelay });
           await delay(Math.min(moreDelay, 1000));
           done++;
-          setBatchStatus(\`已重新查询 \${done}/\${unknownIds.length}\`);
+          setBatchStatus(\`已重新查询 \${done}/\${unknownTasks.length}\`);
         }
         const lines = (batchInput.value || '').split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
-        let skip = batchResults.filter(r => r.httpStatus === 'skip').length;
-        let errors = batchResults.filter(r => r.httpStatus === 'error').length;
-        let http200 = batchResults.filter(r => r.httpStatus === 200).length;
+        let skip = batchResults.filter(r => r && r.httpStatus === 'skip').length;
+        let errors = batchResults.filter(r => r && r.httpStatus === 'error').length;
+        let http200 = batchResults.filter(r => r && r.httpStatus === 200).length;
         let httpOther = lines.length - skip - http200 - errors;
-        let yes = batchResults.filter(r => r.banned === '是').length;
-        let no = batchResults.filter(r => r.banned === '否').length;
-        let unknown = batchResults.filter(r => r.banned === '未知').length;
+        let yes = batchResults.filter(r => r && r.banned === '是').length;
+        let no = batchResults.filter(r => r && r.banned === '否').length;
+        let unknown = batchResults.filter(r => r && r.banned === '未知').length;
         updateLiveStats(http200, yes, no, unknown);
         const ptCounts = {};
         for (const r of batchResults) {
+          if (!r || r.hidden) continue;
           if (r.punishTitle) ptCounts[r.punishTitle] = (ptCounts[r.punishTitle] || 0) + 1;
         }
+        unknownTasks = batchResults.map((r, index) => (r && !r.hidden && r.banned === '未知') ? ({ id: r.id, index }) : null).filter(Boolean);
         const ptLines = Object.keys(ptCounts).length ? ['惩罚标题统计:'].concat(Object.entries(ptCounts).map(([k,v]) => \`- \${k}: \${v}\`)) : [];
         const summary = [
           \`总数: \${lines.length}\`,
