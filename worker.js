@@ -40,7 +40,7 @@ export default {
       const targetUrl = 'https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num);
       const headers = {
         'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Encoding': 'identity',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Connection': 'keep-alive',
         'Referer': 'https://www.douyin.com',
@@ -75,18 +75,25 @@ export default {
         }
         const bodyB64 = btoa(binary);
 
-        // Try to decode as utf-8 for body string
-        let bodyStr = '';
-        try {
-          bodyStr = new TextDecoder('utf-8').decode(bytes);
-        } catch (e) {
-          // ignore
-        }
-
         const ct = resp.headers.get('content-type') || '';
         let charset = 'utf-8';
         const m = ct.match(/charset=([^;]+)/i);
         if (m) charset = m[1].trim().toLowerCase();
+        
+        let bodyStr = '';
+        try {
+          bodyStr = new TextDecoder(charset).decode(bytes);
+        } catch (e) {
+          try {
+            bodyStr = new TextDecoder('utf-8').decode(bytes);
+          } catch (_) {
+            try {
+              bodyStr = new TextDecoder('gbk').decode(bytes);
+            } catch (__) {
+              bodyStr = '';
+            }
+          }
+        }
 
         // Convert headers to object
         const respHeaders = {};
@@ -223,12 +230,13 @@ const html = `<!DOCTYPE html>
           <input id="retryUnknownDelay" type="number" min="100" max="5000" value="800" placeholder="间隔(ms)" style="width:120px; padding:6px 8px; font-size:14px" />
           <button id="statsRetryUnknown">继续查询未知</button>
           <button id="statsCopy">复制统计</button>
-          <button id="statsExport">导出CSV</button>
+          <button id="statsExport">导出XLSX</button>
           <button id="statsOk">知道了</button>
         </div>
       </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script>
       const input = document.getElementById('uniqueId');
       const btn = document.getElementById('queryBtn');
@@ -345,11 +353,18 @@ const html = `<!DOCTYPE html>
         if (!Number.isFinite(v)) return defVal;
         return Math.min(Math.max(v, min), max);
       }
-      function toCSV(rows) {
-        function esc(v) { const s = v == null ? '' : String(v); return '"' + s.replace(/"/g, '""') + '"'; }
-        const header = ['seq','unique_id','sec_uid','http_status','banned','punish_title','note'].map(esc).join(',');
-        const lines = rows.map((r, i) => [esc(i + 1), esc(r.id), esc(r.secUid), esc(r.httpStatus), esc(r.banned), esc(r.punishTitle), esc(r.note)].join(','));
-        return [header, ...lines].join('\\n');
+      function toXlsxBlob(rows) {
+        if (typeof XLSX === 'undefined') throw new Error('XLSX 库未加载');
+        const data = [['seq','unique_id','sec_uid','http_status','banned','punish_title','note']];
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i] || {};
+          data.push([i + 1, r.id || '', r.secUid || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || '', r.punishTitle || '', r.note || '']);
+        }
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'results');
+        const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        return new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       }
 
       function updateConcurrency() {
@@ -569,18 +584,20 @@ const html = `<!DOCTYPE html>
         try { await navigator.clipboard.writeText(text); } catch (_) {}
       });
       statsExport.addEventListener('click', () => {
-        // 导出时过滤掉被隐藏的行（非数字/skip）
-        const visibleRows = batchResults.filter(r => r && !r.hidden);
-        const csv = toCSV(visibleRows);
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'batch_results.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        try {
+          const visibleRows = batchResults.filter(r => r && !r.hidden);
+          const blob = toXlsxBlob(visibleRows);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'batch_results.xlsx';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          setBatchStatus('导出失败: ' + String(e && e.message || e));
+        }
       });
       statsRetryUnknown.addEventListener('click', async () => {
         if (!unknownTasks.length) return;
