@@ -91,7 +91,7 @@ function handleRequest(req, res) {
     }
     const parsed = new URL('https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num));
     const client = https;
-    const reqOptions = { method: 'GET', headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br', 'Connection': 'keep-alive', 'Referer': 'https://www.douyin.com', 'User-Agent': randomUA(), 'Cookie': 'ttwid=' + randomTTWid() } };
+    const reqOptions = { method: 'GET', headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br', 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8', 'Connection': 'keep-alive', 'Referer': 'https://www.douyin.com', 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-site', 'User-Agent': randomUA(), 'Cookie': 'ttwid=' + randomTTWid() } };
     const out = client.request(parsed, reqOptions, (resp) => {
       const chunks = [];
       resp.on('data', (c) => chunks.push(c));

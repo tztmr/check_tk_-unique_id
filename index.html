@@ -61,6 +61,7 @@
     <table style="margin-top:12px; width:100%; border-collapse:collapse;">
       <thead>
         <tr>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">序号</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">unique_id</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">sec_uid</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">HTTP</th>
@@ -170,6 +171,38 @@
         }
         return text;
       }
+      function parseUserState(bodyText) {
+        const raw = String(bodyText || '').trim();
+        if (!raw) return { banned: '未知', punishTitle: null, secUidVal: '' };
+        const normalized = raw.replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, '');
+        const candidates = [normalized];
+        const start = normalized.indexOf('{');
+        const end = normalized.lastIndexOf('}');
+        if (start >= 0 && end > start) candidates.push(normalized.slice(start, end + 1));
+        let obj = null;
+        for (const c of candidates) {
+          try {
+            obj = JSON.parse(c);
+            break;
+          } catch (_) {}
+        }
+        if (obj) {
+          const pt = obj && obj.user_info && obj.user_info.punish_remind_info && obj.user_info.punish_remind_info.punish_title;
+          const su = obj && obj.user_info && obj.user_info.sec_uid;
+          const punishTitle = typeof pt === 'string' ? pt : null;
+          const secUidVal = typeof su === 'string' ? su : '';
+          const banned = punishTitle ? (punishTitle === '账号已被封禁' ? '是' : '否') : (obj && obj.user_info ? '否' : '未知');
+          return { banned, punishTitle, secUidVal };
+        }
+        const ptMatch = normalized.match(/"punish_title"\s*:\s*"([^"]*)"/);
+        const suMatch = normalized.match(/"sec_uid"\s*:\s*"([^"]*)"/);
+        const punishTitle = ptMatch ? ptMatch[1] : null;
+        const secUidVal = suMatch ? suMatch[1] : '';
+        if (punishTitle) return { banned: punishTitle === '账号已被封禁' ? '是' : '否', punishTitle, secUidVal };
+        if (/账号已被封禁/.test(normalized)) return { banned: '是', punishTitle: '账号已被封禁', secUidVal };
+        if (/"status_code"\s*:\s*0/.test(normalized) || /"user_info"\s*:/.test(normalized)) return { banned: '否', punishTitle: null, secUidVal };
+        return { banned: '未知', punishTitle: null, secUidVal };
+      }
       function readNumber(el, defVal, min, max) {
         const v = Number((el && el.value) || defVal);
         if (!Number.isFinite(v)) return defVal;
@@ -177,8 +210,8 @@
       }
       function toCSV(rows) {
         function esc(v) { const s = v == null ? '' : String(v); return '"' + s.replace(/"/g, '""') + '"'; }
-        const header = ['unique_id','sec_uid','http_status','banned','punish_title','note'].map(esc).join(',');
-        const lines = rows.map(r => [esc(r.id), esc(r.secUid), esc(r.httpStatus), esc(r.banned), esc(r.punishTitle), esc(r.note)].join(','));
+        const header = ['seq','unique_id','sec_uid','http_status','banned','punish_title','note'].map(esc).join(',');
+        const lines = rows.map((r, i) => [esc(i + 1), esc(r.id), esc(r.secUid), esc(r.httpStatus), esc(r.banned), esc(r.punishTitle), esc(r.note)].join(','));
         return [header, ...lines].join('\n');
       }
 
@@ -224,7 +257,9 @@
       function ensureRow(index, id) {
         if (rowMap.has(index)) return rowMap.get(index);
         const tr = document.createElement('tr');
+        const seq = index >= 0 ? index + 1 : '';
         tr.innerHTML = `
+          <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">pending</td>
@@ -247,23 +282,13 @@
           const httpStatus = data.status;
           const bodyText = decodeResponse(data);
           let punishTitle = null;
-          let banned = '否';
+          let banned = '未知';
           let secUidVal = '';
           if (httpStatus === 200) {
-            if (!bodyText || !String(bodyText).trim()) {
-              banned = '未知';
-            } else {
-              try {
-                const obj = JSON.parse(bodyText);
-                const pt = obj && obj.user_info && obj.user_info.punish_remind_info && obj.user_info.punish_remind_info.punish_title;
-                if (typeof pt === 'string') punishTitle = pt;
-                const su = obj && obj.user_info && obj.user_info.sec_uid;
-                if (typeof su === 'string') secUidVal = su;
-                banned = punishTitle === '账号已被封禁' ? '是' : '否';
-              } catch (_) {
-                banned = '未知';
-              }
-            }
+            const parsed = parseUserState(bodyText);
+            punishTitle = parsed.punishTitle;
+            banned = parsed.banned;
+            secUidVal = parsed.secUidVal;
           }
           return { httpStatus, punishTitle, banned, secUidVal };
         }
@@ -277,7 +302,9 @@
           }
           const bannedColor = r.banned === '是' ? '#d32f2f' : (r.banned === '否' ? '#2e7d32' : '#555');
           const suLink = r.secUidVal ? `<a href="https://www.douyin.com/user/${encodeURIComponent(r.secUidVal)}" target="_blank" rel="noopener noreferrer">${r.secUidVal}</a>` : '';
+          const seq = index >= 0 ? index + 1 : '';
           const html = `
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${suLink}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.httpStatus}</td>
@@ -290,7 +317,9 @@
           if (index >= 0) batchResults[index] = rec;
           return r;
         } catch (e) {
+          const seq = index >= 0 ? index + 1 : '';
           const html = `
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">error</td>
