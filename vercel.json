@@ -1,10 +1,7 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "index.js", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/(request|check)", "dest": "/index.js" },
-    { "src": "/", "dest": "/index.html" }
+  "rewrites": [
+    { "source": "/request", "destination": "/api/index" },
+    { "source": "/check", "destination": "/api/index" },
+    { "source": "/verify", "destination": "/api/index" }
   ]
 }

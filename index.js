@@ -178,7 +178,7 @@ function handleRequest(req, res) {
   send(res, 404, { error: 'not found' });
 }
 
-if (!process.env.VERCEL) {
+if (require.main === module && !process.env.VERCEL) {
   const server = http.createServer(handleRequest);
   server.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
