@@ -51,7 +51,7 @@
         <div style="display:flex; gap:8px;">
           <button id="batchBtn" style="flex:1;">开始批量查询</button>
           <button id="directExportBtn" style="flex:1;">导出 XLSX</button>
-          <button id="togglePunishTitleBtn" style="flex:1;">显示并导出违规标题</button>
+          <button id="togglePunishTitleBtn" style="flex:1;">显示并导出违规</button>
         </div>
         <div id="batchStatus" style="color:#555"></div>
         <div id="liveStats" style="font-size:13px; color:#333; display:grid; grid-template-columns:repeat(2, auto); gap:6px 16px;">
@@ -70,8 +70,8 @@
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">sec_uid</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">HTTP</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">封禁</th>
-          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">违规</th>
-          <th id="punishTitleHeader" style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">违规标题</th>
+          <th id="violationHeader" style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">违规</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">违规信息</th>
         </tr>
       </thead>
       <tbody id="batchBody"></tbody>
@@ -117,7 +117,7 @@
       const batchRetriesEl = document.getElementById('batchRetries');
       const batchAttemptDelayEl = document.getElementById('batchAttemptDelay');
       const togglePunishTitleBtn = document.getElementById('togglePunishTitleBtn');
-      const punishTitleHeader = document.getElementById('punishTitleHeader');
+      const violationHeader = document.getElementById('violationHeader');
       const statsMask = document.getElementById('statsMask');
       const statsContent = document.getElementById('statsContent');
       const statsClose = document.getElementById('statsClose');
@@ -144,20 +144,20 @@
       function isDigits(s) { return /^\d+$/.test(s); }
       function showStats(text) { statsContent.textContent = text || ''; statsMask.style.display = 'flex'; }
       function hideStats() { statsMask.style.display = 'none'; }
-      function isPunishTitleEnabled() {
+      function isViolationEnabled() {
         return !togglePunishTitleBtn || togglePunishTitleBtn.dataset.enabled !== 'false';
       }
-      function setPunishTitleEnabled(enabled) {
+      function setViolationEnabled(enabled) {
         if (togglePunishTitleBtn) {
           togglePunishTitleBtn.dataset.enabled = enabled ? 'true' : 'false';
-          togglePunishTitleBtn.textContent = enabled ? '显示并导出违规标题' : '关闭违规标题显示/导出';
+          togglePunishTitleBtn.textContent = enabled ? '显示并导出违规' : '关闭违规显示/导出';
         }
-        updatePunishTitleVisibility();
+        updateViolationVisibility();
       }
-      function updatePunishTitleVisibility() {
-        const display = isPunishTitleEnabled() ? 'table-cell' : 'none';
-        if (punishTitleHeader) punishTitleHeader.style.display = display;
-        batchBody.querySelectorAll('.punish-title-cell').forEach((cell) => {
+      function updateViolationVisibility() {
+        const display = isViolationEnabled() ? 'table-cell' : 'none';
+        if (violationHeader) violationHeader.style.display = display;
+        batchBody.querySelectorAll('.violation-cell').forEach((cell) => {
           cell.style.display = display;
         });
       }
@@ -168,7 +168,7 @@
             alert('当前没有可导出的结果');
             return;
           }
-          const blob = toXlsxBlob(visibleRows, { includePunishTitle: isPunishTitleEnabled() });
+          const blob = toXlsxBlob(visibleRows, { includeViolation: isViolationEnabled() });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
@@ -267,15 +267,17 @@
       }
       function toXlsxBlob(rows, opts) {
         if (typeof XLSX === 'undefined') throw new Error('XLSX 库未加载');
-        const includePunishTitle = !opts || opts.includePunishTitle !== false;
-        const header = ['seq','unique_id','sec_uid','http_status','banned','违规'];
-        if (includePunishTitle) header.push('违规标题');
+        const includeViolation = !opts || opts.includeViolation !== false;
+        const header = ['seq','unique_id','sec_uid','http_status','banned'];
+        if (includeViolation) header.push('违规');
+        header.push('违规信息');
         header.push('note');
         const data = [header];
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i] || {};
-          const row = [i + 1, r.id || '', r.secUid || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || '', r.violation || ''];
-          if (includePunishTitle) row.push(r.punishTitle || '');
+          const row = [i + 1, r.id || '', r.secUid || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || ''];
+          if (includeViolation) row.push(r.violation || '');
+          row.push(r.punishTitle || '');
           row.push(r.note || '');
           data.push(row);
         }
@@ -336,12 +338,12 @@
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">pending</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
-          <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
+          <td class="violation-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
           <td class="punish-title-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
         `;
         batchBody.appendChild(tr);
-        const punishCell = tr.querySelector('.punish-title-cell');
-        if (punishCell) punishCell.style.display = isPunishTitleEnabled() ? 'table-cell' : 'none';
+        const violationCell = tr.querySelector('.violation-cell');
+        if (violationCell) violationCell.style.display = isViolationEnabled() ? 'table-cell' : 'none';
         rowMap.set(index, tr);
         return tr;
       }
@@ -387,13 +389,13 @@
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${suLink}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.httpStatus}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${bannedColor};">${r.banned}</td>
-            <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${violationColor};">${r.violation}</td>
+            <td class="violation-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${violationColor};">${r.violation}</td>
             <td class="punish-title-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.punishTitle || ''}</td>
           `;
           const tr = ensureRow(index, id);
           tr.innerHTML = html;
-          const punishCell = tr.querySelector('.punish-title-cell');
-          if (punishCell) punishCell.style.display = isPunishTitleEnabled() ? 'table-cell' : 'none';
+          const violationCell = tr.querySelector('.violation-cell');
+          if (violationCell) violationCell.style.display = isViolationEnabled() ? 'table-cell' : 'none';
           const rec = { 
             id, 
             secUid: r.secUidVal, 
@@ -413,13 +415,13 @@
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">error</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
-            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
+            <td class="violation-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
             <td class="punish-title-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef;">${String(e && e.message || e)}</td>
           `;
           const tr = ensureRow(index, id);
           tr.innerHTML = html;
-          const punishCell = tr.querySelector('.punish-title-cell');
-          if (punishCell) punishCell.style.display = isPunishTitleEnabled() ? 'table-cell' : 'none';
+          const violationCell = tr.querySelector('.violation-cell');
+          if (violationCell) violationCell.style.display = isViolationEnabled() ? 'table-cell' : 'none';
           const rec = { id, secUid: '', httpStatus: 'error', banned: '-', violation: '-', punishTitle: '', note: String(e && e.message || e) };
           if (index >= 0) batchResults[index] = rec;
           return { error: true };
@@ -570,9 +572,9 @@
         showStats(summary);
       });
       togglePunishTitleBtn.addEventListener('click', () => {
-        setPunishTitleEnabled(!isPunishTitleEnabled());
+        setViolationEnabled(!isViolationEnabled());
       });
-      setPunishTitleEnabled(true);
+      setViolationEnabled(true);
     </script>
   </body>
 </html>
