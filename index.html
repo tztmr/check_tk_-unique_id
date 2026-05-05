@@ -48,13 +48,17 @@
             <input id="batchAttemptDelay" type="number" min="100" max="5000" value="500" placeholder="单次重试间隔(ms)" style="width:160px; padding:8px 12px; font-size:14px" />
           </div>
         </div>
-        <button id="batchBtn">开始批量查询</button>
+        <div style="display:flex; gap:8px;">
+          <button id="batchBtn" style="flex:1;">开始批量查询</button>
+          <button id="directExportBtn" style="flex:1;">导出 XLSX</button>
+        </div>
         <div id="batchStatus" style="color:#555"></div>
-        <div id="liveStats" style="font-size:13px; color:#333; display:grid; grid-template-columns:repeat(2, auto); gap:6px 16px;">
+        <div id="liveStats" style="font-size:13px; color:#333; display:grid; grid-template-columns:repeat(3, auto); gap:6px 16px;">
           <div>成功: <span id="countSuccess">0</span></div>
           <div>封禁: <span id="countBanned">0</span></div>
           <div>正常: <span id="countNormal">0</span></div>
           <div>未知: <span id="countUnknown">0</span></div>
+          <div>已认证: <span id="countVerifyDone">0</span></div>
         </div>
       </div>
     </div>
@@ -64,8 +68,11 @@
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">序号</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">unique_id</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">sec_uid</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">认证类型</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">认证信息</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">HTTP</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">封禁</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">违规</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">punish_title</th>
         </tr>
       </thead>
@@ -100,11 +107,13 @@
       const resultEl = document.getElementById('result');
       const batchInput = document.getElementById('batchIds');
       const batchBtn = document.getElementById('batchBtn');
+      const directExportBtn = document.getElementById('directExportBtn');
       const batchStatus = document.getElementById('batchStatus');
       const countSuccessEl = document.getElementById('countSuccess');
       const countBannedEl = document.getElementById('countBanned');
       const countNormalEl = document.getElementById('countNormal');
       const countUnknownEl = document.getElementById('countUnknown');
+      const countVerifyDoneEl = document.getElementById('countVerifyDone');
       const batchBody = document.getElementById('batchBody');
       const batchIntervalEl = document.getElementById('batchInterval');
       const batchConcurrencyEl = document.getElementById('batchConcurrency');
@@ -126,16 +135,37 @@
       function setStatus(text) { statusEl.textContent = text || ''; }
       function setResult(text) { resultEl.textContent = text || ''; }
       function setBatchStatus(text) { batchStatus.textContent = text || ''; }
-      function updateLiveStats(s, b, n, u) {
+      function updateLiveStats(s, b, n, u, vd) {
         countSuccessEl.textContent = String(s);
         countBannedEl.textContent = String(b);
         countNormalEl.textContent = String(n);
         countUnknownEl.textContent = String(u);
+        countVerifyDoneEl.textContent = String(vd || 0);
       }
       function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
       function isDigits(s) { return /^\d+$/.test(s); }
       function showStats(text) { statsContent.textContent = text || ''; statsMask.style.display = 'flex'; }
       function hideStats() { statsMask.style.display = 'none'; }
+      function handleExport() {
+        try {
+          const visibleRows = batchResults.filter(r => r && !r.hidden);
+          if (!visibleRows.length) {
+            alert('当前没有可导出的结果');
+            return;
+          }
+          const blob = toXlsxBlob(visibleRows);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `batch_results_${new Date().getTime()}.xlsx`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          alert('导出失败: ' + String(e && e.message || e));
+        }
+      }
       function base64ToBytes(b64) {
         try {
           const bin = atob(b64);
@@ -174,7 +204,7 @@
       }
       function parseUserState(bodyText) {
         const raw = String(bodyText || '').trim();
-        if (!raw) return { banned: '未知', punishTitle: null, secUidVal: '' };
+        if (!raw) return { banned: '未知', punishTitle: null, secUidVal: '', returnedUniqueId: '', nickname: '', violation: '否' };
         const normalized = raw.replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, '');
         const candidates = [normalized];
         const start = normalized.indexOf('{');
@@ -188,21 +218,55 @@
           } catch (_) {}
         }
         if (obj) {
-          const pt = obj && obj.user_info && obj.user_info.punish_remind_info && obj.user_info.punish_remind_info.punish_title;
-          const su = obj && obj.user_info && obj.user_info.sec_uid;
+          const userInfo = obj && obj.user_info;
+          const pt = userInfo && userInfo.punish_remind_info && userInfo.punish_remind_info.punish_title;
+          const su = userInfo && userInfo.sec_uid;
+          const uid = userInfo && userInfo.unique_id;
+          const nn = userInfo && userInfo.nickname;
           const punishTitle = typeof pt === 'string' ? pt : null;
           const secUidVal = typeof su === 'string' ? su : '';
-          const banned = punishTitle ? (punishTitle === '账号已被封禁' ? '是' : '否') : (obj && obj.user_info ? '否' : '未知');
-          return { banned, punishTitle, secUidVal };
+          const returnedUniqueId = typeof uid === 'string' ? uid : '';
+          const nickname = typeof nn === 'string' ? nn : '';
+          const violation = returnedUniqueId && nickname && returnedUniqueId === nickname ? '是' : '否';
+          const banned = punishTitle ? (punishTitle === '账号已被封禁' ? '是' : '否') : (userInfo ? '否' : '未知');
+          return { banned, punishTitle, secUidVal, returnedUniqueId, nickname, violation };
         }
         const ptMatch = normalized.match(/"punish_title"\s*:\s*"([^"]*)"/);
         const suMatch = normalized.match(/"sec_uid"\s*:\s*"([^"]*)"/);
+        const uidMatch = normalized.match(/"unique_id"\s*:\s*"([^"]*)"/);
+        const nnMatch = normalized.match(/"nickname"\s*:\s*"([^"]*)"/);
         const punishTitle = ptMatch ? ptMatch[1] : null;
         const secUidVal = suMatch ? suMatch[1] : '';
-        if (punishTitle) return { banned: punishTitle === '账号已被封禁' ? '是' : '否', punishTitle, secUidVal };
-        if (/账号已被封禁/.test(normalized)) return { banned: '是', punishTitle: '账号已被封禁', secUidVal };
-        if (/"status_code"\s*:\s*0/.test(normalized) || /"user_info"\s*:/.test(normalized)) return { banned: '否', punishTitle: null, secUidVal };
-        return { banned: '未知', punishTitle: null, secUidVal };
+        const returnedUniqueId = uidMatch ? uidMatch[1] : '';
+        const nickname = nnMatch ? nnMatch[1] : '';
+        const violation = returnedUniqueId && nickname && returnedUniqueId === nickname ? '是' : '否';
+        if (punishTitle) return { banned: punishTitle === '账号已被封禁' ? '是' : '否', punishTitle, secUidVal, returnedUniqueId, nickname, violation };
+        if (/账号已被封禁/.test(normalized)) return { banned: '是', punishTitle: '账号已被封禁', secUidVal, returnedUniqueId, nickname, violation };
+        if (/"status_code"\s*:\s*0/.test(normalized) || /"user_info"\s*:/.test(normalized)) return { banned: '否', punishTitle: null, secUidVal, returnedUniqueId, nickname, violation };
+        return { banned: '未知', punishTitle: null, secUidVal, returnedUniqueId, nickname, violation };
+      }
+      function parseVerifyState(bodyText) {
+        const raw = String(bodyText || '').trim();
+        if (!raw) return { type: -1, typeStr: "未知", custom: "" };
+        try {
+          const obj = JSON.parse(raw);
+          const user = obj.user || obj;
+          const vType = user.verification_type;
+          const custom = user.custom_verify || "";
+          const entReason = user.enterprise_verify_reason || "";
+          
+          // 综合判断是否认证：类型非0，或者有个人认证文案，或者有企业认证原因
+          const isVerified = (typeof vType !== 'undefined' && vType !== 0) || !!custom || !!entReason;
+          const typeStr = isVerified ? "已认证" : "普通用户";
+          
+          return { 
+            type: isVerified ? 1 : 0, 
+            typeStr, 
+            custom: entReason || custom // 优先展示企业认证原因
+          };
+        } catch (_) {
+          return { type: -1, typeStr: "未知", custom: "" };
+        }
       }
       function readNumber(el, defVal, min, max) {
         const v = Number((el && el.value) || defVal);
@@ -211,10 +275,10 @@
       }
       function toXlsxBlob(rows) {
         if (typeof XLSX === 'undefined') throw new Error('XLSX 库未加载');
-        const data = [['seq','unique_id','sec_uid','http_status','banned','punish_title','note']];
+        const data = [['seq','unique_id','sec_uid','认证类型','认证信息','http_status','banned','违规','punish_title','note']];
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i] || {};
-          data.push([i + 1, r.id || '', r.secUid || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || '', r.punishTitle || '', r.note || '']);
+          data.push([i + 1, r.id || '', r.secUid || '', r.verifyTypeStr || '', r.verifyCustom || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || '', r.violation || '', r.punishTitle || '', r.note || '']);
         }
         const ws = XLSX.utils.aoa_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -246,11 +310,22 @@
           const data = await resp.json();
           setStatus(`HTTP ${data.status}`);
           let body = decodeResponse(data);
+          let displayBody = body;
           try {
             const parsed = JSON.parse(body);
-            body = JSON.stringify(parsed, null, 2);
+            displayBody = JSON.stringify(parsed, null, 2);
+            const userState = parseUserState(body);
+            if (userState.secUidVal && userState.banned !== '是') {
+              const vResp = await fetch(`/verify?sec_uid=${encodeURIComponent(userState.secUidVal)}`);
+              const vData = await vResp.json();
+              const vBody = decodeResponse(vData);
+              try {
+                const vParsed = JSON.parse(vBody);
+                displayBody += "\n\n--- 认证信息 ---\n" + JSON.stringify(vParsed, null, 2);
+              } catch(_) {}
+            }
           } catch (_) {}
-          setResult(body || '无返回');
+          setResult(displayBody || '无返回');
         } catch (e) {
           setStatus('请求失败');
           setResult(String(e && e.message || e));
@@ -270,7 +345,10 @@
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+          <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+          <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">pending</td>
+          <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
         `;
@@ -292,13 +370,24 @@
           let punishTitle = null;
           let banned = '未知';
           let secUidVal = '';
+          let violation = '否';
+          let verifyInfo = { type: -1, typeStr: "", custom: "" };
           if (httpStatus === 200) {
             const parsed = parseUserState(bodyText);
             punishTitle = parsed.punishTitle;
             banned = parsed.banned;
             secUidVal = parsed.secUidVal;
+            violation = parsed.violation;
+            if (secUidVal && banned !== '是') {
+              try {
+                const vResp = await fetch(`/verify?sec_uid=${encodeURIComponent(secUidVal)}`);
+                const vData = await vResp.json();
+                const vBodyText = decodeResponse(vData);
+                verifyInfo = parseVerifyState(vBodyText);
+              } catch (_) {}
+            }
           }
-          return { httpStatus, punishTitle, banned, secUidVal };
+          return { httpStatus, punishTitle, banned, secUidVal, violation, verifyInfo };
         }
         try {
           let r = await attempt();
@@ -309,19 +398,34 @@
             retries--;
           }
           const bannedColor = r.banned === '是' ? '#d32f2f' : (r.banned === '否' ? '#2e7d32' : '#555');
+          const violationColor = r.violation === '是' ? '#d32f2f' : '#2e7d32';
           const suLink = r.secUidVal ? `<a href="https://www.douyin.com/user/${encodeURIComponent(r.secUidVal)}" target="_blank" rel="noopener noreferrer">${r.secUidVal}</a>` : '';
           const seq = index >= 0 ? index + 1 : '';
           const html = `
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${suLink}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.verifyInfo.typeStr || ''}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.verifyInfo.custom || ''}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.httpStatus}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${bannedColor};">${r.banned}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:${violationColor};">${r.violation}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.punishTitle || ''}</td>
           `;
           const tr = ensureRow(index, id);
           tr.innerHTML = html;
-          const rec = { id, secUid: r.secUidVal, httpStatus: r.httpStatus, banned: r.banned, punishTitle: r.punishTitle || '', note: '' };
+          const rec = { 
+            id, 
+            secUid: r.secUidVal, 
+            httpStatus: r.httpStatus, 
+            banned: r.banned, 
+            violation: r.violation,
+            punishTitle: r.punishTitle || '', 
+            verifyType: r.verifyInfo.type,
+            verifyTypeStr: r.verifyInfo.typeStr,
+            verifyCustom: r.verifyInfo.custom,
+            note: '' 
+          };
           if (index >= 0) batchResults[index] = rec;
           return r;
         } catch (e) {
@@ -330,13 +434,16 @@
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">error</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${String(e && e.message || e)}</td>
           `;
           const tr = ensureRow(index, id);
           tr.innerHTML = html;
-          const rec = { id, secUid: '', httpStatus: 'error', banned: '-', punishTitle: '', note: String(e && e.message || e) };
+          const rec = { id, secUid: '', httpStatus: 'error', banned: '-', violation: '-', punishTitle: '', verifyType: -1, verifyTypeStr: '', verifyCustom: '', note: String(e && e.message || e) };
           if (index >= 0) batchResults[index] = rec;
           return { error: true };
         }
@@ -361,8 +468,9 @@
         let yes = 0;
         let no = 0;
         let unknown = 0;
+        let vDone = 0;
         let processed = 0;
-        updateLiveStats(http200, yes, no, unknown);
+        updateLiveStats(http200, yes, no, unknown, vDone);
 
         const queue = [];
         for (let i = 0; i < lines.length; i++) {
@@ -370,7 +478,7 @@
           if (!isDigits(id)) {
             skip++;
             done++;
-            batchResults[i] = { id, secUid: '', httpStatus: 'skip', banned: '-', punishTitle: '', note: '非数字', hidden: true };
+            batchResults[i] = { id, secUid: '', httpStatus: 'skip', banned: '-', violation: '-', punishTitle: '', note: '非数字', hidden: true };
             continue;
           }
           ensureRow(i, id);
@@ -393,13 +501,14 @@
               } else {
                 if (r.httpStatus === 200) http200++; else httpOther++;
                 if (r.banned === '是') yes++; else if (r.banned === '否') no++; else unknown++;
+                if (r.verifyInfo && (r.verifyInfo.type === 1 || r.verifyInfo.type === 2)) vDone++;
               }
               if (intervalMs > 0) await delay(intervalMs);
             } catch (e) {
               console.error(e);
             } finally {
               done++;
-              updateLiveStats(http200, yes, no, unknown);
+              updateLiveStats(http200, yes, no, unknown, vDone);
               setBatchStatus(`已完成 ${done}/${lines.length}`);
               activeCount--;
             }
@@ -428,7 +537,8 @@
           `请求失败(非200): ${httpOther}`,
           `封禁: ${yes}`,
           `未封禁: ${no}`,
-          `未知: ${unknown}`
+          `未知: ${unknown}`,
+          `已认证: ${vDone}`
         ].concat(ptLines).join('\n');
         statsRetryUnknown.textContent = `继续查询未知(${unknown})`;
         statsRetryUnknown.disabled = unknown === 0;
@@ -440,22 +550,8 @@
         const text = statsContent.textContent || '';
         try { await navigator.clipboard.writeText(text); } catch (_) {}
       });
-      statsExport.addEventListener('click', () => {
-        try {
-          const visibleRows = batchResults.filter(r => r && !r.hidden);
-          const blob = toXlsxBlob(visibleRows);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'batch_results.xlsx';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        } catch (e) {
-          setBatchStatus('导出失败: ' + String(e && e.message || e));
-        }
-      });
+      statsExport.addEventListener('click', handleExport);
+      directExportBtn.addEventListener('click', handleExport);
       statsRetryUnknown.addEventListener('click', async () => {
         if (!unknownTasks.length) return;
         hideStats();
@@ -477,7 +573,8 @@
         let yes = batchResults.filter(r => r && r.banned === '是').length;
         let no = batchResults.filter(r => r && r.banned === '否').length;
         let unknown = batchResults.filter(r => r && r.banned === '未知').length;
-        updateLiveStats(http200, yes, no, unknown);
+        let vDone = batchResults.filter(r => r && (r.verifyType === 1 || r.verifyType === 2)).length;
+        updateLiveStats(http200, yes, no, unknown, vDone);
         const ptCounts = {};
         for (const r of batchResults) {
           if (!r || r.hidden) continue;
@@ -493,7 +590,8 @@
           `请求失败(非200): ${httpOther}`,
           `封禁: ${yes}`,
           `未封禁: ${no}`,
-          `未知: ${unknown}`
+          `未知: ${unknown}`,
+          `已认证: ${vDone}`
         ].concat(ptLines).join('\n');
         statsRetryUnknown.textContent = `继续查询未知(${unknown})`;
         statsRetryUnknown.disabled = unknown === 0;

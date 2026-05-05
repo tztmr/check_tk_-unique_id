@@ -15,6 +15,24 @@ function send(res, status, data, headers = {}) {
 
 function handleRequest(req, res) {
   const u = new URL(req.url, `http://localhost:${port}`);
+
+  function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+  function randomTTWid() {
+    const parts = [];
+    for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
+    return parts.join('');
+  }
+  function randomUA() {
+    const osList = [
+      'Macintosh; Intel Mac OS X 10_15_7',
+      'Windows NT 10.0; Win64; x64',
+      'X11; Linux x86_64'
+    ];
+    const os = osList[randInt(0, osList.length - 1)];
+    const chromeMajor = randInt(120, 131);
+    return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+  }
+
   if (req.method === 'GET' && u.pathname === '/') {
     const filePath = path.join(__dirname, 'index.html');
     fs.readFile(filePath, (err, data) => {
@@ -73,22 +91,6 @@ function handleRequest(req, res) {
       const v = Number(timeoutMsRaw);
       if (Number.isFinite(v)) timeoutMs = Math.min(Math.max(v, 1000), 60000);
     }
-    function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-    function randomTTWid() {
-      const parts = [];
-      for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
-      return parts.join('');
-    }
-    function randomUA() {
-      const osList = [
-        'Macintosh; Intel Mac OS X 10_15_7',
-        'Windows NT 10.0; Win64; x64',
-        'X11; Linux x86_64'
-      ];
-      const os = osList[randInt(0, osList.length - 1)];
-      const chromeMajor = randInt(120, 131);
-      return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
-    }
     const parsed = new URL('https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num));
     const client = https;
     const reqOptions = { method: 'GET', headers: { 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br', 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8', 'Connection': 'keep-alive', 'Referer': 'https://www.douyin.com', 'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-site', 'User-Agent': randomUA(), 'Cookie': 'ttwid=' + randomTTWid() } };
@@ -116,6 +118,54 @@ function handleRequest(req, res) {
     out.setTimeout(timeoutMs);
     out.on('timeout', () => {
       out.destroy(new Error('timeout'));
+    });
+    out.on('error', (err) => send(res, 502, { error: String(err && err.message || err) }));
+    out.end();
+    return;
+  }
+  if (req.method === 'GET' && u.pathname === '/verify') {
+    const secUid = u.searchParams.get('sec_uid') || '';
+    if (!secUid) return send(res, 400, { error: 'missing sec_uid' });
+    
+    function randomAoDeviceId() {
+      let res = '';
+      for (let i = 0; i < 16; i++) res += Math.floor(Math.random() * 10);
+      return res;
+    }
+
+    const url = `https://open.douyin.com/aweme/open/export_sdk/user/profile?to_sec_uid=${encodeURIComponent(secUid)}`;
+    const parsed = new URL(url);
+    const client = https;
+    const reqOptions = { 
+      method: 'GET', 
+      headers: { 
+        'ao-app-id': '32',
+        'ao-device-id': randomAoDeviceId(),
+        'Accept': '*/*', 
+        'Accept-Encoding': 'gzip, deflate, br', 
+        'User-Agent': randomUA(), 
+        'Connection': 'keep-alive',
+        'Cookie': 'ttwid=' + randomTTWid()
+      } 
+    };
+    
+    const out = client.request(parsed, reqOptions, (resp) => {
+      const chunks = [];
+      resp.on('data', (c) => chunks.push(c));
+      resp.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        const enc = String(resp.headers['content-encoding'] || '').toLowerCase();
+        let rawBuf = buf;
+        try {
+          if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
+          else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
+          else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
+        } catch (_) {}
+        const ct = String(resp.headers['content-type'] || '');
+        const bodyStr = rawBuf.toString('utf8');
+        const bodyB64 = rawBuf.toString('base64');
+        send(res, 200, { status: resp.statusCode, headers: resp.headers, content_type: ct, body: bodyStr, body_b64: bodyB64 });
+      });
     });
     out.on('error', (err) => send(res, 502, { error: String(err && err.message || err) }));
     out.end();
