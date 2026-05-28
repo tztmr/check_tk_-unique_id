@@ -32,6 +32,58 @@ function handleRequest(req, res) {
     const chromeMajor = randInt(120, 131);
     return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
   }
+  function decodeBodyBuffer(buf, headers = {}) {
+    const enc = String(headers['content-encoding'] || '').toLowerCase();
+    let rawBuf = buf;
+    try {
+      if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
+      else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
+      else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
+    } catch (_) {}
+    return rawBuf;
+  }
+  function fetchFollowerCount(secUserId, timeoutMs) {
+    return new Promise((resolve) => {
+      if (!secUserId) return resolve(null);
+      const profileUrl = new URL('https://imdesktop.douyin.com/aweme/v1/web/user/profile/other/');
+      profileUrl.searchParams.set('aid', '339757');
+      profileUrl.searchParams.set('device_id', '7184690798967999755');
+      profileUrl.searchParams.set('version_name', '1.0.0');
+      profileUrl.searchParams.set('device_platform', 'win32');
+      profileUrl.searchParams.set('sec_user_id', secUserId);
+      const profileReq = https.request(profileUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': '*/*',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'User-Agent': 'PostmanRuntime-ApipostRuntime/1.1.0',
+          'Connection': 'keep-alive'
+        }
+      }, (profileResp) => {
+        const chunks = [];
+        profileResp.on('data', (c) => chunks.push(c));
+        profileResp.on('end', () => {
+          try {
+            const rawBuf = decodeBodyBuffer(Buffer.concat(chunks), profileResp.headers);
+            const text = rawBuf.toString('utf8');
+            const obj = JSON.parse(text);
+            const followerCount =
+              (obj && obj.user && obj.user.follower_count) ??
+              (obj && obj.user_info && obj.user_info.follower_count) ??
+              (obj && obj.follower_count) ??
+              null;
+            resolve(followerCount == null ? null : followerCount);
+          } catch (_) {
+            resolve(null);
+          }
+        });
+      });
+      profileReq.setTimeout(timeoutMs);
+      profileReq.on('timeout', () => profileReq.destroy(new Error('timeout')));
+      profileReq.on('error', () => resolve(null));
+      profileReq.end();
+    });
+  }
 
   if (req.method === 'GET' && u.pathname === '/') {
     const filePath = path.join(__dirname, 'index.html');
@@ -61,18 +113,12 @@ function handleRequest(req, res) {
       resp.on('data', (c) => chunks.push(c));
       resp.on('end', () => {
         const buf = Buffer.concat(chunks);
-        const enc = String(resp.headers['content-encoding'] || '').toLowerCase();
-        let rawBuf = buf;
-        try {
-          if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
-          else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
-          else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
-        } catch (_) {}
+        let rawBuf = decodeBodyBuffer(buf, resp.headers);
         const ct = String(resp.headers['content-type'] || '');
         let charset = 'utf-8';
         const m = ct.match(/charset=([^;]+)/i);
         if (m) charset = m[1].trim().toLowerCase();
-        const bodyStr = rawBuf.toString('utf8');
+        let bodyStr = rawBuf.toString('utf8');
         const bodyB64 = rawBuf.toString('base64');
         send(res, 200, { status: resp.statusCode, headers: resp.headers, content_type: ct, charset, body: bodyStr, body_b64: bodyB64 });
       });
@@ -97,20 +143,27 @@ function handleRequest(req, res) {
     const out = client.request(parsed, reqOptions, (resp) => {
       const chunks = [];
       resp.on('data', (c) => chunks.push(c));
-      resp.on('end', () => {
+      resp.on('end', async () => {
         const buf = Buffer.concat(chunks);
-        const enc = String(resp.headers['content-encoding'] || '').toLowerCase();
-        let rawBuf = buf;
-        try {
-          if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
-          else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
-          else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
-        } catch (_) {}
+        let rawBuf = decodeBodyBuffer(buf, resp.headers);
         const ct = String(resp.headers['content-type'] || '');
         let charset = 'utf-8';
         const m = ct.match(/charset=([^;]+)/i);
         if (m) charset = m[1].trim().toLowerCase();
-        const bodyStr = rawBuf.toString('utf8');
+        let bodyStr = rawBuf.toString('utf8');
+        try {
+          const parsedBody = JSON.parse(bodyStr.replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, ''));
+          const userInfo = parsedBody && parsedBody.user_info;
+          const secUserId = (userInfo && userInfo.sec_uid) || secUid;
+          const followerCount = await fetchFollowerCount(secUserId, timeoutMs);
+          if (userInfo && followerCount != null) {
+            userInfo.follower_count = followerCount;
+            userInfo.follower_count_str = String(followerCount);
+            bodyStr = JSON.stringify(parsedBody);
+            rawBuf = Buffer.from(bodyStr, 'utf8');
+            charset = 'utf-8';
+          }
+        } catch (_) {}
         const bodyB64 = rawBuf.toString('base64');
         send(res, 200, { status: resp.statusCode, headers: resp.headers, content_type: ct, charset, body: bodyStr, body_b64: bodyB64 });
       });
