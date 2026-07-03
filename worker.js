@@ -1,3 +1,107 @@
+function parseJsonish(text) {
+  const normalized = String(text || '').trim().replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, '');
+  if (!normalized) return null;
+  const candidates = [normalized];
+  const start = normalized.indexOf('{');
+  const end = normalized.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(normalized.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_) {}
+  }
+  return null;
+}
+
+function mergeProfileIntoUserInfo(apiBody, profileBody) {
+  if (!apiBody || typeof apiBody !== 'object') return apiBody;
+  const apiUserInfo = apiBody.user_info && typeof apiBody.user_info === 'object' ? apiBody.user_info : null;
+  const profileUser = profileBody && typeof profileBody === 'object'
+    ? ((profileBody.user && typeof profileBody.user === 'object')
+      ? profileBody.user
+      : ((profileBody.user_info && typeof profileBody.user_info === 'object') ? profileBody.user_info : null))
+    : null;
+
+  if (!apiUserInfo && !profileUser) return apiBody;
+
+  const mergedUserInfo = {
+    ...(apiUserInfo || {}),
+    ...(profileUser || {})
+  };
+
+  const apiPunish = apiUserInfo && apiUserInfo.punish_remind_info && typeof apiUserInfo.punish_remind_info === 'object'
+    ? apiUserInfo.punish_remind_info
+    : null;
+  const profilePunish = profileUser && profileUser.punish_remind_info && typeof profileUser.punish_remind_info === 'object'
+    ? profileUser.punish_remind_info
+    : null;
+
+  if (apiPunish || profilePunish) {
+    mergedUserInfo.punish_remind_info = {
+      ...(apiPunish || {}),
+      ...(profilePunish || {})
+    };
+  }
+
+  if (mergedUserInfo.follower_count != null && mergedUserInfo.follower_count_str == null) {
+    mergedUserInfo.follower_count_str = String(mergedUserInfo.follower_count);
+  }
+
+  return {
+    ...apiBody,
+    user_info: mergedUserInfo
+  };
+}
+
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function randomTTWid() {
+  const parts = [];
+  for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
+  return parts.join('');
+}
+function randomUA() {
+  const osList = [
+    'Macintosh; Intel Mac OS X 10_15_7',
+    'Windows NT 10.0; Win64; x64',
+    'X11; Linux x86_64'
+  ];
+  const os = osList[randInt(0, osList.length - 1)];
+  const chromeMajor = randInt(120, 131);
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+}
+
+async function fetchSecUidProfile(secUid, timeoutMs) {
+  if (!secUid) return null;
+  const profileUrl = new URL('https://imdesktop.douyin.com/aweme/v1/web/user/profile/other/');
+  profileUrl.searchParams.set('aid', '339757');
+  profileUrl.searchParams.set('device_id', '7184690798967999755');
+  profileUrl.searchParams.set('version_name', '1.0.0');
+  profileUrl.searchParams.set('device_platform', 'win32');
+  profileUrl.searchParams.set('sec_user_id', secUid);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const resp = await fetch(profileUrl.toString(), {
+      method: 'GET',
+      headers: {
+        'Accept': '*/*',
+        'Accept-Encoding': 'identity',
+        'User-Agent': 'PostmanRuntime-ApipostRuntime/1.1.0',
+        'Connection': 'keep-alive'
+      },
+      signal: controller.signal
+    });
+    const text = await resp.text();
+    return parseJsonish(text);
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -18,23 +122,6 @@ export default {
       if (timeoutMsRaw) {
         const v = Number(timeoutMsRaw);
         if (Number.isFinite(v)) timeoutMs = Math.min(Math.max(v, 1000), 60000);
-      }
-
-      function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-      function randomTTWid() {
-        const parts = [];
-        for (let i = 0; i < 4; i++) parts.push(Math.random().toString(36).slice(2));
-        return parts.join('');
-      }
-      function randomUA() {
-        const osList = [
-          'Macintosh; Intel Mac OS X 10_15_7',
-          'Windows NT 10.0; Win64; x64',
-          'X11; Linux x86_64'
-        ];
-        const os = osList[randInt(0, osList.length - 1)];
-        const chromeMajor = randInt(120, 131);
-        return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
       }
 
       const targetUrl = 'https://www.douyin.com/web/api/v2/user/info/?sec_uid=' + encodeURIComponent(secUid) + '&unique_id=' + encodeURIComponent(num);
@@ -66,21 +153,13 @@ export default {
         // Fetch API automatically handles decompression
         const arrayBuffer = await resp.arrayBuffer();
         
-        // Convert to base64
-        let binary = '';
-        const bytes = new Uint8Array(arrayBuffer);
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        const bodyB64 = btoa(binary);
-
         const ct = resp.headers.get('content-type') || '';
         let charset = 'utf-8';
         const m = ct.match(/charset=([^;]+)/i);
         if (m) charset = m[1].trim().toLowerCase();
         
         let bodyStr = '';
+        const bytes = new Uint8Array(arrayBuffer);
         try {
           bodyStr = new TextDecoder(charset).decode(bytes);
         } catch (e) {
@@ -95,6 +174,26 @@ export default {
           }
         }
 
+        const parsedBody = parseJsonish(bodyStr);
+        const firstUserInfo = parsedBody && parsedBody.user_info;
+        const resolvedSecUid = (firstUserInfo && firstUserInfo.sec_uid) || secUid;
+        const profileBody = await fetchSecUidProfile(resolvedSecUid, timeoutMs);
+        const mergedBody = mergeProfileIntoUserInfo(parsedBody, profileBody);
+
+        let finalBodyStr = bodyStr;
+        let finalBytes = bytes;
+        if (mergedBody && typeof mergedBody === 'object') {
+          finalBodyStr = JSON.stringify(mergedBody);
+          finalBytes = new TextEncoder().encode(finalBodyStr);
+          charset = 'utf-8';
+        }
+
+        let binary = '';
+        for (let i = 0; i < finalBytes.byteLength; i++) {
+          binary += String.fromCharCode(finalBytes[i]);
+        }
+        const bodyB64 = btoa(binary);
+
         // Convert headers to object
         const respHeaders = {};
         for (const [key, value] of resp.headers.entries()) {
@@ -106,7 +205,7 @@ export default {
           headers: respHeaders,
           content_type: ct,
           charset,
-          body: bodyStr,
+          body: finalBodyStr,
           body_b64: bodyB64
         }), {
           status: 200,
@@ -332,11 +431,12 @@ const html = `<!DOCTYPE html>
           } catch (_) {}
         }
         if (obj) {
-          const pt = obj && obj.user_info && obj.user_info.punish_remind_info && obj.user_info.punish_remind_info.punish_title;
-          const su = obj && obj.user_info && obj.user_info.sec_uid;
+          const userInfo = (obj && obj.user_info) || (obj && obj.user);
+          const pt = userInfo && userInfo.punish_remind_info && userInfo.punish_remind_info.punish_title;
+          const su = userInfo && userInfo.sec_uid;
           const punishTitle = typeof pt === 'string' ? pt : null;
           const secUidVal = typeof su === 'string' ? su : '';
-          const banned = punishTitle ? (punishTitle === '账号已被封禁' ? '是' : '否') : (obj && obj.user_info ? '否' : '未知');
+          const banned = punishTitle ? (punishTitle === '账号已被封禁' ? '是' : '否') : (userInfo ? '否' : '未知');
           return { banned, punishTitle, secUidVal };
         }
         const ptMatch = normalized.match(/"punish_title"\s*:\s*"([^"]*)"/);

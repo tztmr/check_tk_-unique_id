@@ -13,6 +13,109 @@ function send(res, status, data, headers = {}) {
   res.end(body);
 }
 
+function decodeBodyBuffer(buf, headers = {}) {
+  const enc = String(headers['content-encoding'] || '').toLowerCase();
+  let rawBuf = buf;
+  try {
+    if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
+    else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
+    else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
+  } catch (_) {}
+  return rawBuf;
+}
+
+function parseJsonish(text) {
+  const normalized = String(text || '').trim().replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, '');
+  if (!normalized) return null;
+  const candidates = [normalized];
+  const start = normalized.indexOf('{');
+  const end = normalized.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(normalized.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_) {}
+  }
+  return null;
+}
+
+function mergeProfileIntoUserInfo(apiBody, profileBody) {
+  if (!apiBody || typeof apiBody !== 'object') return apiBody;
+  const apiUserInfo = apiBody.user_info && typeof apiBody.user_info === 'object' ? apiBody.user_info : null;
+  const profileUser = profileBody && typeof profileBody === 'object'
+    ? ((profileBody.user && typeof profileBody.user === 'object')
+      ? profileBody.user
+      : ((profileBody.user_info && typeof profileBody.user_info === 'object') ? profileBody.user_info : null))
+    : null;
+
+  if (!apiUserInfo && !profileUser) return apiBody;
+
+  const mergedUserInfo = {
+    ...(apiUserInfo || {}),
+    ...(profileUser || {})
+  };
+
+  const apiPunish = apiUserInfo && apiUserInfo.punish_remind_info && typeof apiUserInfo.punish_remind_info === 'object'
+    ? apiUserInfo.punish_remind_info
+    : null;
+  const profilePunish = profileUser && profileUser.punish_remind_info && typeof profileUser.punish_remind_info === 'object'
+    ? profileUser.punish_remind_info
+    : null;
+
+  if (apiPunish || profilePunish) {
+    mergedUserInfo.punish_remind_info = {
+      ...(apiPunish || {}),
+      ...(profilePunish || {})
+    };
+  }
+
+  if (mergedUserInfo.follower_count != null && mergedUserInfo.follower_count_str == null) {
+    mergedUserInfo.follower_count_str = String(mergedUserInfo.follower_count);
+  }
+
+  return {
+    ...apiBody,
+    user_info: mergedUserInfo
+  };
+}
+
+function fetchSecUidProfile(secUserId, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!secUserId) return resolve(null);
+    const profileUrl = new URL('https://imdesktop.douyin.com/aweme/v1/web/user/profile/other/');
+    profileUrl.searchParams.set('aid', '339757');
+    profileUrl.searchParams.set('device_id', '7184690798967999755');
+    profileUrl.searchParams.set('version_name', '1.0.0');
+    profileUrl.searchParams.set('device_platform', 'win32');
+    profileUrl.searchParams.set('sec_user_id', secUserId);
+    const profileReq = https.request(profileUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'User-Agent': 'PostmanRuntime-ApipostRuntime/1.1.0',
+        'Connection': 'keep-alive'
+      }
+    }, (profileResp) => {
+      const chunks = [];
+      profileResp.on('data', (c) => chunks.push(c));
+      profileResp.on('end', () => {
+        try {
+          const rawBuf = decodeBodyBuffer(Buffer.concat(chunks), profileResp.headers);
+          const text = rawBuf.toString('utf8');
+          resolve(parseJsonish(text));
+        } catch (_) {
+          resolve(null);
+        }
+      });
+    });
+    profileReq.setTimeout(timeoutMs);
+    profileReq.on('timeout', () => profileReq.destroy(new Error('timeout')));
+    profileReq.on('error', () => resolve(null));
+    profileReq.end();
+  });
+}
+
 function handleRequest(req, res) {
   const u = new URL(req.url, `http://localhost:${port}`);
 
@@ -31,58 +134,6 @@ function handleRequest(req, res) {
     const os = osList[randInt(0, osList.length - 1)];
     const chromeMajor = randInt(120, 131);
     return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
-  }
-  function decodeBodyBuffer(buf, headers = {}) {
-    const enc = String(headers['content-encoding'] || '').toLowerCase();
-    let rawBuf = buf;
-    try {
-      if (enc.includes('br')) rawBuf = zlib.brotliDecompressSync(buf);
-      else if (enc.includes('gzip')) rawBuf = zlib.gunzipSync(buf);
-      else if (enc.includes('deflate')) rawBuf = zlib.inflateSync(buf);
-    } catch (_) {}
-    return rawBuf;
-  }
-  function fetchFollowerCount(secUserId, timeoutMs) {
-    return new Promise((resolve) => {
-      if (!secUserId) return resolve(null);
-      const profileUrl = new URL('https://imdesktop.douyin.com/aweme/v1/web/user/profile/other/');
-      profileUrl.searchParams.set('aid', '339757');
-      profileUrl.searchParams.set('device_id', '7184690798967999755');
-      profileUrl.searchParams.set('version_name', '1.0.0');
-      profileUrl.searchParams.set('device_platform', 'win32');
-      profileUrl.searchParams.set('sec_user_id', secUserId);
-      const profileReq = https.request(profileUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': '*/*',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'User-Agent': 'PostmanRuntime-ApipostRuntime/1.1.0',
-          'Connection': 'keep-alive'
-        }
-      }, (profileResp) => {
-        const chunks = [];
-        profileResp.on('data', (c) => chunks.push(c));
-        profileResp.on('end', () => {
-          try {
-            const rawBuf = decodeBodyBuffer(Buffer.concat(chunks), profileResp.headers);
-            const text = rawBuf.toString('utf8');
-            const obj = JSON.parse(text);
-            const followerCount =
-              (obj && obj.user && obj.user.follower_count) ??
-              (obj && obj.user_info && obj.user_info.follower_count) ??
-              (obj && obj.follower_count) ??
-              null;
-            resolve(followerCount == null ? null : followerCount);
-          } catch (_) {
-            resolve(null);
-          }
-        });
-      });
-      profileReq.setTimeout(timeoutMs);
-      profileReq.on('timeout', () => profileReq.destroy(new Error('timeout')));
-      profileReq.on('error', () => resolve(null));
-      profileReq.end();
-    });
   }
 
   if (req.method === 'GET' && u.pathname === '/') {
@@ -152,14 +203,13 @@ function handleRequest(req, res) {
         if (m) charset = m[1].trim().toLowerCase();
         let bodyStr = rawBuf.toString('utf8');
         try {
-          const parsedBody = JSON.parse(bodyStr.replace(/^\uFEFF/, '').replace(/^for\s*\(\s*;;\s*\);\s*/, ''));
+          const parsedBody = parseJsonish(bodyStr);
           const userInfo = parsedBody && parsedBody.user_info;
           const secUserId = (userInfo && userInfo.sec_uid) || secUid;
-          const followerCount = await fetchFollowerCount(secUserId, timeoutMs);
-          if (userInfo && followerCount != null) {
-            userInfo.follower_count = followerCount;
-            userInfo.follower_count_str = String(followerCount);
-            bodyStr = JSON.stringify(parsedBody);
+          const profileBody = await fetchSecUidProfile(secUserId, timeoutMs);
+          const mergedBody = mergeProfileIntoUserInfo(parsedBody, profileBody);
+          if (mergedBody && typeof mergedBody === 'object') {
+            bodyStr = JSON.stringify(mergedBody);
             rawBuf = Buffer.from(bodyStr, 'utf8');
             charset = 'utf-8';
           }
@@ -238,6 +288,13 @@ if (require.main === module && !process.env.VERCEL) {
   });
 }
 
-module.exports = (req, res) => {
+const handler = (req, res) => {
   handleRequest(req, res);
 };
+
+handler.__test__ = {
+  mergeProfileIntoUserInfo,
+  parseJsonish
+};
+
+module.exports = handler;

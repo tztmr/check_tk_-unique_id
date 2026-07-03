@@ -234,7 +234,7 @@
           } catch (_) {}
         }
         if (obj) {
-          const userInfo = obj && obj.user_info;
+          const userInfo = (obj && obj.user_info) || (obj && obj.user);
           const pt = userInfo && userInfo.punish_remind_info && userInfo.punish_remind_info.punish_title;
           const su = userInfo && userInfo.sec_uid;
           const uid = userInfo && userInfo.unique_id;
