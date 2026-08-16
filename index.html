@@ -67,6 +67,7 @@
         <tr>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">序号</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">unique_id</th>
+          <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">抖音昵称</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">sec_uid</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">粉丝</th>
           <th style="text-align:left; border-bottom:1px solid #eaecef; padding:6px 4px;">HTTP</th>
@@ -275,14 +276,14 @@
       function toXlsxBlob(rows, opts) {
         if (typeof XLSX === 'undefined') throw new Error('XLSX 库未加载');
         const includeViolation = !opts || opts.includeViolation !== false;
-        const header = ['seq','unique_id','sec_uid','粉丝','http_status','banned'];
+        const header = ['seq','unique_id','抖音昵称','sec_uid','粉丝','http_status','banned'];
         if (includeViolation) header.push('违规');
         header.push('违规信息');
         header.push('note');
         const data = [header];
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i] || {};
-          const row = [i + 1, r.id || '', r.secUid || '', r.fansTitle || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || ''];
+          const row = [i + 1, r.id || '', r.nickname || '', r.secUid || '', r.fansTitle || '', r.httpStatus == null ? '' : r.httpStatus, r.banned || ''];
           if (includeViolation) row.push(r.violation || '');
           row.push(r.punishTitle || '');
           row.push(r.note || '');
@@ -344,6 +345,7 @@
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+          <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">pending</td>
           <td style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
           <td class="violation-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef; color:#555;">-</td>
@@ -371,6 +373,7 @@
           let secUidVal = '';
           let fansTitle = '';
           let violation = '否';
+          let nickname = '';
           if (httpStatus === 200) {
             const parsed = parseUserState(bodyText);
             punishTitle = parsed.punishTitle;
@@ -378,8 +381,9 @@
             secUidVal = parsed.secUidVal;
             fansTitle = parsed.fansTitle || '';
             violation = parsed.violation;
+            nickname = parsed.nickname || '';
           }
-          return { httpStatus, punishTitle, banned, secUidVal, fansTitle, violation };
+          return { httpStatus, punishTitle, banned, secUidVal, fansTitle, violation, nickname };
         }
         try {
           let r = await attempt();
@@ -396,6 +400,7 @@
           const html = `
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${seq}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.nickname || ''}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${suLink}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.fansTitle || ''}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${r.httpStatus}</td>
@@ -409,6 +414,7 @@
           if (violationCell) violationCell.style.display = isViolationEnabled() ? 'table-cell' : 'none';
           const rec = { 
             id, 
+            nickname: r.nickname || '',
             secUid: r.secUidVal, 
             fansTitle: r.fansTitle || '',
             httpStatus: r.httpStatus, 
@@ -426,6 +432,7 @@
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">${id}</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
+            <td style="padding:6px 4px; border-bottom:1px solid #eaecef;"></td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">error</td>
             <td style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
             <td class="violation-cell" style="padding:6px 4px; border-bottom:1px solid #eaecef;">-</td>
@@ -435,7 +442,7 @@
           tr.innerHTML = html;
           const violationCell = tr.querySelector('.violation-cell');
           if (violationCell) violationCell.style.display = isViolationEnabled() ? 'table-cell' : 'none';
-          const rec = { id, secUid: '', fansTitle: '', httpStatus: 'error', banned: '-', violation: '-', punishTitle: '', note: String(e && e.message || e) };
+          const rec = { id, nickname: '', secUid: '', fansTitle: '', httpStatus: 'error', banned: '-', violation: '-', punishTitle: '', note: String(e && e.message || e) };
           if (index >= 0) batchResults[index] = rec;
           return { error: true };
         }
@@ -469,7 +476,7 @@
           if (!isDigits(id)) {
             skip++;
             done++;
-            batchResults[i] = { id, secUid: '', fansTitle: '', httpStatus: 'skip', banned: '-', violation: '-', punishTitle: '', note: '非数字', hidden: true };
+            batchResults[i] = { id, nickname: '', secUid: '', fansTitle: '', httpStatus: 'skip', banned: '-', violation: '-', punishTitle: '', note: '非数字', hidden: true };
             continue;
           }
           ensureRow(i, id);
